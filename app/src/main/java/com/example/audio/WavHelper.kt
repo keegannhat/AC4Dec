@@ -73,8 +73,34 @@ object WavHelper {
         }
     }
 
+    data class WavHeaderInfo(
+        val channelCount: Int,
+        val sampleRate: Int,
+        val bitsPerSample: Int
+    )
+
+    fun readWavHeader(file: File): WavHeaderInfo {
+        file.inputStream().use { fis ->
+            val header = ByteArray(44)
+            var offset = 0
+            while (offset < 44) {
+                val n = fis.read(header, offset, 44 - offset)
+                if (n == -1) break
+                offset += n
+            }
+            if (offset < 44) {
+                throw java.io.IOException("Invalid WAV header size: $offset bytes")
+            }
+            val buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
+            val channelCount = buf.getShort(22).toInt() and 0xFFFF
+            val sampleRate = buf.getInt(24)
+            val bitsPerSample = buf.getShort(34).toInt() and 0xFFFF
+            return WavHeaderInfo(channelCount, sampleRate, bitsPerSample)
+        }
+    }
+
     /**
-     * Splits multi-channel interleaved 16-bit PCM data into multiple mono PCM files.
+     * Splits multi-channel interleaved PCM data into multiple mono WAV files.
      * Returns a list of split mono WAV files, encoded at the chosen bitsPerSample.
      */
     fun splitMultichannelWav(
@@ -89,17 +115,20 @@ object WavHelper {
             outputDir.mkdirs()
         }
 
-        val channelNames = when (channelCount) {
+        // Dynamically detect input characteristics
+        val headerInfo = try { readWavHeader(inputFile) } catch (e: Exception) { WavHeaderInfo(channelCount, sampleRate, 16) }
+        val inputBitsPerSample = headerInfo.bitsPerSample
+        val inputSampleSize = inputBitsPerSample / 8
+        val inputChannelCount = headerInfo.channelCount
+        val inputFrameSize = inputChannelCount * inputSampleSize
+
+        val channelNames = when (inputChannelCount) {
             1 -> listOf("Mono")
             2 -> listOf("Left", "Right")
             6 -> listOf("Left(L)", "Right(R)", "Center(C)", "LFE", "SurroundLeft(Ls)", "SurroundRight(Rs)")
             8 -> listOf("Left", "Right", "Center", "LFE", "SurroundLeft", "SurroundRight", "BackLeft", "BackRight")
-            else -> (1..channelCount).map { "Channel_$it" }
+            else -> (1..inputChannelCount).map { "Channel_$it" }
         }
-
-        // Input cache file is always 16-bit PCM, i.e., 2 bytes per sample
-        val inputSampleSize = 2
-        val inputFrameSize = channelCount * inputSampleSize
         
         val files = channelNames.map { name ->
             File(outputDir, "${baseName}_$name.wav")
@@ -107,8 +136,7 @@ object WavHelper {
         
         val fileStreams = files.map { file ->
             val fos = FileOutputStream(file)
-            // Write placeholder header, update later
-            writeWavHeader(1, sampleRate, bitsPerSample, 0, fos)
+            writeWavHeader(1, headerInfo.sampleRate, bitsPerSample, 0, fos)
             fos
         }
 
@@ -116,26 +144,48 @@ object WavHelper {
 
         try {
             inputFile.inputStream().buffered().use { fis ->
-                // Skip the header of the input file (assuming it has a 44-byte WAV header)
                 fis.skip(44)
                 
                 val buffer = ByteArray(inputFrameSize)
-                val dataSizes = LongArray(channelCount) { 0L }
+                val dataSizes = LongArray(inputChannelCount) { 0L }
 
                 while (readExactly(fis, buffer)) {
-                    for (c in 0 until channelCount) {
+                    for (c in 0 until inputChannelCount) {
                         val sampleOffset = c * inputSampleSize
-                        val low = buffer[sampleOffset].toInt() and 0xFF
-                        val high = buffer[sampleOffset + 1].toInt()
-                        val sample16 = ((high shl 8) or low).toShort()
+                        val sample16 = when (inputBitsPerSample) {
+                            16 -> {
+                                val low = buffer[sampleOffset].toInt() and 0xFF
+                                val high = buffer[sampleOffset + 1].toInt()
+                                ((high shl 8) or low).toShort()
+                            }
+                            24 -> {
+                                val b0 = buffer[sampleOffset].toInt() and 0xFF
+                                val b1 = buffer[sampleOffset + 1].toInt() and 0xFF
+                                val b2 = buffer[sampleOffset + 2].toInt()
+                                val val24 = (b2 shl 16) or (b1 shl 8) or b0
+                                (val24 shr 8).toShort()
+                            }
+                            32 -> {
+                                val b0 = buffer[sampleOffset].toInt() and 0xFF
+                                val b1 = buffer[sampleOffset + 1].toInt() and 0xFF
+                                val b2 = buffer[sampleOffset + 2].toInt() and 0xFF
+                                val b3 = buffer[sampleOffset + 3].toInt()
+                                val val32 = (b3 shl 24) or (b2 shl 16) or (b1 shl 8) or b0
+                                (val32 shr 16).toShort()
+                            }
+                            else -> {
+                                val low = buffer[sampleOffset].toInt() and 0xFF
+                                val high = buffer[sampleOffset + 1].toInt()
+                                ((high shl 8) or low).toShort()
+                            }
+                        }
                         
                         writeSample(fileStreams[c], sample16, bitsPerSample)
                         dataSizes[c] += outputSampleSize
                     }
                 }
                 
-                // Update final wav headers with correct values
-                for (c in 0 until channelCount) {
+                for (c in 0 until inputChannelCount) {
                     fileStreams[c].close()
                     updateWavHeaderSizes(files[c], dataSizes[c])
                 }
@@ -190,12 +240,15 @@ object WavHelper {
         sampleRate: Int,
         bitsPerSample: Int
     ): File {
-        // Input cache file is always 16-bit PCM (sample size = 2 bytes)
-        val inputSampleSize = 2
-        val inputFrameSize = sourceChannelCount * inputSampleSize
+        // Dynamically detect input characteristics
+        val headerInfo = try { readWavHeader(inputFile) } catch (e: Exception) { WavHeaderInfo(sourceChannelCount, sampleRate, 16) }
+        val inputBitsPerSample = headerInfo.bitsPerSample
+        val inputSampleSize = inputBitsPerSample / 8
+        val inputChannelCount = headerInfo.channelCount
+        val inputFrameSize = inputChannelCount * inputSampleSize
         
         val fos = FileOutputStream(outputFile)
-        writeWavHeader(2, sampleRate, bitsPerSample, 0, fos)
+        writeWavHeader(2, headerInfo.sampleRate, bitsPerSample, 0, fos)
         
         var outputDataSize = 0L
         val outputSampleSize = bitsPerSample / 8
@@ -207,19 +260,42 @@ object WavHelper {
                 val frameBuffer = ByteArray(inputFrameSize)
                 
                 while (readExactly(fis, frameBuffer)) {
-                    // Read 16-bit PCM values
-                    val channels = ShortArray(sourceChannelCount)
-                    for (c in 0 until sourceChannelCount) {
+                    val channels = ShortArray(inputChannelCount)
+                    for (c in 0 until inputChannelCount) {
                         val offset = c * inputSampleSize
-                        val low = frameBuffer[offset].toInt() and 0xFF
-                        val high = frameBuffer[offset + 1].toInt()
-                        channels[c] = ((high shl 8) or low).toShort()
+                        channels[c] = when (inputBitsPerSample) {
+                            16 -> {
+                                val low = frameBuffer[offset].toInt() and 0xFF
+                                val high = frameBuffer[offset + 1].toInt()
+                                ((high shl 8) or low).toShort()
+                            }
+                            24 -> {
+                                val b0 = frameBuffer[offset].toInt() and 0xFF
+                                val b1 = frameBuffer[offset + 1].toInt() and 0xFF
+                                val b2 = frameBuffer[offset + 2].toInt()
+                                val val24 = (b2 shl 16) or (b1 shl 8) or b0
+                                (val24 shr 8).toShort()
+                            }
+                            32 -> {
+                                val b0 = frameBuffer[offset].toInt() and 0xFF
+                                val b1 = frameBuffer[offset + 1].toInt() and 0xFF
+                                val b2 = frameBuffer[offset + 2].toInt() and 0xFF
+                                val b3 = frameBuffer[offset + 3].toInt()
+                                val val32 = (b3 shl 24) or (b2 shl 16) or (b1 shl 8) or b0
+                                (val32 shr 16).toShort()
+                            }
+                            else -> {
+                                val low = frameBuffer[offset].toInt() and 0xFF
+                                val high = frameBuffer[offset + 1].toInt()
+                                ((high shl 8) or low).toShort()
+                            }
+                        }
                     }
 
                     val l: Short
                     val r: Short
                     
-                    if (sourceChannelCount >= 6) {
+                    if (inputChannelCount >= 6) {
                         // 5.1 layout indices: L=0, R=1, C=2, LFE=3, Ls=4, Rs=5
                         val leftVal = channels[0].toFloat()
                         val rightVal = channels[1].toFloat()
@@ -227,15 +303,12 @@ object WavHelper {
                         val lsVal = channels[4].toFloat()
                         val rsVal = channels[5].toFloat()
 
-                        // ITU-R standard surround-to-stereo downmix:
-                        // L_stereo = (L + C * 0.707 + Ls * 0.707) * 0.707
-                        // R_stereo = (R + C * 0.707 + Rs * 0.707) * 0.707
                         val mixedL = (leftVal + (centerVal * 0.707f) + (lsVal * 0.707f)) * 0.707f
                         val mixedR = (rightVal + (centerVal * 0.707f) + (rsVal * 0.707f)) * 0.707f
 
                         l = mixedL.coerceIn(-32768f, 32767f).toInt().toShort()
                         r = mixedR.coerceIn(-32768f, 32767f).toInt().toShort()
-                    } else if (sourceChannelCount == 1) {
+                    } else if (inputChannelCount == 1) {
                         l = channels[0]
                         r = channels[0]
                     } else {

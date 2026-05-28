@@ -167,6 +167,7 @@ fun DecoderAppScreen(
     val loopPlayback by viewModel.loopPlayback.collectAsState()
     val playbackElapsedMs by viewModel.playbackElapsedMs.collectAsState()
     val playbackTotalMs by viewModel.playbackTotalMs.collectAsState()
+    val isAc4Ims by viewModel.isAc4Ims.collectAsState()
 
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -411,7 +412,8 @@ fun DecoderAppScreen(
                                 selectedPresentationIndex = selectedPresentationIndex,
                                 onSelectPresentation = { viewModel.switchPresentation(it) },
                                 speakerConfig = speakerConfig,
-                                onSpeakerConfigChange = { viewModel.setSpeakerConfig(it) }
+                                onSpeakerConfigChange = { viewModel.setSpeakerConfig(it) },
+                                isIms = isAc4Ims
                             )
                         }
 
@@ -1090,7 +1092,8 @@ fun FileSelectedCard(
     selectedPresentationIndex: Int,
     onSelectPresentation: (Int) -> Unit,
     speakerConfig: String,
-    onSpeakerConfigChange: (String) -> Unit
+    onSpeakerConfigChange: (String) -> Unit,
+    isIms: Boolean = false
 ) {
     val isBinauralSource = info.channelCount == 2 && name.contains(".ac4", ignoreCase = true)
 
@@ -1281,30 +1284,59 @@ fun FileSelectedCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                val layouts = listOf("Mono", "Stereo", "5.1", "7.1", "7.1.4", "9.1.6")
-                layouts.forEach { layout ->
+                val layoutOptions = listOf(
+                    "Mono"  to false,
+                    "Stereo" to false,
+                    "5.1"   to isIms,   // disabled when IMS
+                    "7.1"   to isIms,
+                    "7.1.4" to isIms,
+                    "9.1.6" to isIms
+                )
+                layoutOptions.forEach { (layout, disabled) ->
                     val isLayoutActive = speakerConfig == layout
                     val tooHighForBinaural = isBinauralSource && layout != "Mono" && layout != "Stereo" && layout != "5.1"
+                    val isButtonEnabled = !disabled
                     
                     Button(
-                        onClick = { if (!tooHighForBinaural) onSpeakerConfigChange(layout) },
+                        onClick = { if (isButtonEnabled && !tooHighForBinaural) onSpeakerConfigChange(layout) },
+                        enabled = isButtonEnabled,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isLayoutActive) CyberCyan else (if (tooHighForBinaural) Color.Transparent else Color(0xFF131A26)),
-                            contentColor = if (isLayoutActive) SlateGrayBg else (if (tooHighForBinaural) CoolGrayText.copy(alpha = 0.4f) else IceWhite)
+                            contentColor = if (isLayoutActive) SlateGrayBg else (if (tooHighForBinaural) CoolGrayText.copy(alpha = 0.4f) else IceWhite),
+                            disabledContainerColor = Color(0xFF131A26).copy(alpha = 0.5f),
+                            disabledContentColor = IceWhite.copy(alpha = 0.35f)
                         ),
                         modifier = Modifier
                             .weight(1f)
-                            .height(34.dp),
+                            .height(34.dp)
+                            .then(if (disabled) Modifier.alpha(0.35f) else Modifier),
                         contentPadding = PaddingValues(0.dp),
                         shape = RoundedCornerShape(6.dp),
-                        border = if (tooHighForBinaural) BorderStroke(1.dp, SurfaceBorder.copy(alpha = 0.5f)) else null
+                        border = if (tooHighForBinaural && !disabled) BorderStroke(1.dp, SurfaceBorder.copy(alpha = 0.5f)) else null
                     ) {
                         Text(layout, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
-            if (isBinauralSource) {
+            if (isIms) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "IMS limit warning",
+                        tint = PurpleGlow,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Not available for AC-4 IMS (2.0 max)",
+                        color = PurpleGlow,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            } else if (isBinauralSource) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
@@ -1315,7 +1347,7 @@ fun FileSelectedCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        "Dolby Binaural AC-4 IMS is hardcapped to 5.1 bed elements in dynamic export models.",
+                        text = "Dolby Binaural AC-4 IMS is hardcapped to 5.1 bed elements in dynamic export models.",
                         color = PurpleGlow,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.SemiBold

@@ -1,6 +1,7 @@
 package com.example.audio
 
 import android.content.Context
+import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaCodecList
 import android.media.MediaExtractor
@@ -10,7 +11,9 @@ import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -215,6 +218,43 @@ object DolbyAc4Decoder {
         )
     }
 
+    fun convertPcmBuffer(
+        input: ByteArray, 
+        fromEncoding: Int, 
+        toBitsPerSample: Int
+    ): ByteArray {
+        if (fromEncoding != AudioFormat.ENCODING_PCM_FLOAT) 
+            return input
+        val floatBuf = ByteBuffer.wrap(input)
+            .order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
+        val out = ByteArrayOutputStream()
+        while (floatBuf.hasRemaining()) {
+            val f = floatBuf.get().coerceIn(-1f, 1f)
+            when (toBitsPerSample) {
+                16 -> {
+                    val s = (f * 32767f).toInt().toShort()
+                    out.write(s.toInt() and 0xFF)
+                    out.write((s.toInt() shr 8) and 0xFF)
+                }
+                24 -> {
+                    val s = (f * 8388607f).toInt()
+                    out.write(s and 0xFF)
+                    out.write((s shr 8) and 0xFF)
+                    out.write((s shr 16) and 0xFF)
+                }
+                32 -> {
+                    // Keep as float bytes, rewrite as signed 32-bit
+                    val s = (f * 2147483647f).toInt()
+                    out.write(s and 0xFF)
+                    out.write((s shr 8) and 0xFF)
+                    out.write((s shr 16) and 0xFF)
+                    out.write((s shr 24) and 0xFF)
+                }
+            }
+        }
+        return out.toByteArray()
+    }
+
     /**
      * Decodes Dolby AC-4/E-AC3 using MediaCodec if supported, or falls back to software DD+ 5.1 core.
      */
@@ -222,8 +262,9 @@ object DolbyAc4Decoder {
         context: Context,
         inputUri: Uri,
         outputPcmFile: File,
-        onProgress: (Float) -> Unit,
-        onStatusUpdate: (String) -> Unit
+        targetBitsPerSample: Int,
+        onProgress: suspend (Float) -> Unit,
+        onStatusUpdate: suspend (String) -> Unit
     ): DecodedMetadata = withContext(Dispatchers.IO) {
         val supportInfo = checkAc4Support()
 
@@ -278,11 +319,13 @@ object DolbyAc4Decoder {
             codec.start()
 
             bos = BufferedOutputStream(FileOutputStream(outputPcmFile))
-            val channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            val durationUs = format.getLong(MediaFormat.KEY_DURATION)
+            var actualChannelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var actualSampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var actualBitsPerSample = 16
+            var actualPcmEncoding = AudioFormat.ENCODING_PCM_16BIT
+            var wavHeaderWritten = false  // Delay WAV header until format is known
             
-            WavHelper.writeWavHeader(channelCount, sampleRate, 16, 0, bos)
+            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
 
             // We must determine the output buffers logic
 
@@ -297,6 +340,7 @@ object DolbyAc4Decoder {
             onStatusUpdate("Decoding audio...")
 
             while (!isOutputEos && coroutineContext.isActive) {
+                yield()
                 if (!isInputEos) {
                     val inputBufferIndex = codec.dequeueInputBuffer(10000)
                     if (inputBufferIndex >= 0) {
@@ -344,8 +388,22 @@ object DolbyAc4Decoder {
                         
                         val pcmChunk = ByteArray(bufferInfo.size)
                         outputBuffer.get(pcmChunk)
-                        bos.write(pcmChunk)
-                        totalDataBytes += bufferInfo.size
+                        
+                        val bStream = bos
+                        if (bStream != null) {
+                            if (!wavHeaderWritten) {
+                                if (actualPcmEncoding == AudioFormat.ENCODING_PCM_FLOAT) {
+                                    actualBitsPerSample = targetBitsPerSample
+                                }
+                                WavHelper.writeWavHeader(actualChannelCount, actualSampleRate, actualBitsPerSample, 0, bStream)
+                                wavHeaderWritten = true
+                            }
+
+                            val finalChunk = convertPcmBuffer(
+                                pcmChunk, actualPcmEncoding, targetBitsPerSample)
+                            bStream.write(finalChunk)
+                            totalDataBytes += finalChunk.size
+                        }
                     }
 
                     codec.releaseOutputBuffer(outputBufferIndex, false)
@@ -354,30 +412,48 @@ object DolbyAc4Decoder {
                         isOutputEos = true
                     }
                 } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    // Decoder channel/sample rate might change
+                    val outFmt = codec.outputFormat
+                    actualChannelCount = outFmt.getInteger(
+                        MediaFormat.KEY_CHANNEL_COUNT, actualChannelCount)
+                    actualSampleRate = outFmt.getInteger(
+                        MediaFormat.KEY_SAMPLE_RATE, actualSampleRate)
+                    actualPcmEncoding = try {
+                        outFmt.getInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+                    } catch (e: Exception) {
+                        if (outFmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) outFmt.getInteger(MediaFormat.KEY_PCM_ENCODING) else AudioFormat.ENCODING_PCM_16BIT
+                    }
+                    actualBitsPerSample = when (actualPcmEncoding) {
+                        AudioFormat.ENCODING_PCM_8BIT  -> 8
+                        AudioFormat.ENCODING_PCM_16BIT -> 16
+                        AudioFormat.ENCODING_PCM_32BIT -> 32
+                        AudioFormat.ENCODING_PCM_FLOAT -> 32
+                        else -> 16
+                    }
+                    onStatusUpdate("Output format: ${actualChannelCount}ch · ${actualSampleRate}Hz · ${actualBitsPerSample}-bit")
                 }
             }
 
-            bos.flush()
-            bos.close()
+            bos?.flush()
+            bos?.close()
             bos = null
 
             // Write actual file size into WAV header
             onStatusUpdate("Writing file...")
             WavHelper.updateWavHeaderSizes(outputPcmFile, totalDataBytes)
 
-            val profile = if (channelCount == 2) {
+            val profile = if (actualChannelCount == 2) {
                 "IMS (Immersive Stereo / Binaural)"
             } else {
-                "L4 (Multichannel Surround, ${channelCount}ch)"
+                "L4 (Multichannel Surround, ${actualChannelCount}ch)"
             }
 
             return@withContext DecodedMetadata(
                 mimeType = mime,
-                channelCount = channelCount,
-                sampleRate = sampleRate,
+                channelCount = actualChannelCount,
+                sampleRate = actualSampleRate,
                 durationUs = durationUs,
                 profile = profile,
+                bitDepth = actualBitsPerSample,
                 isSimulated = false
             )
 
