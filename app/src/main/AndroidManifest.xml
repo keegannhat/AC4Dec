@@ -2,8 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="false" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="false" />
 
     <application
         android:allowBackup="true"

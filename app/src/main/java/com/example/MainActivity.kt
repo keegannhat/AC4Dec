@@ -56,12 +56,27 @@ import com.example.ui.AudioDecoderViewModel
 import com.example.ui.theme.*
 import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.delay
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import kotlin.math.cos
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
+    private var vulkanAvailable: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        vulkanAvailable = packageManager.hasSystemFeature(
+            android.content.pm.PackageManager.FEATURE_VULKAN_HARDWARE_LEVEL, 1
+        )
+        
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
@@ -72,6 +87,7 @@ class MainActivity : ComponentActivity() {
                     contentWindowInsets = WindowInsets.safeDrawing
                 ) { innerPadding ->
                     DecoderAppScreen(
+                        vulkanAvailable = vulkanAvailable,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
@@ -85,14 +101,49 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DecoderAppScreen(
+    vulkanAvailable: Boolean,
     modifier: Modifier = Modifier,
     viewModel: AudioDecoderViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val isReducedMotion = android.provider.Settings.Global.getFloat(
+        context.contentResolver,
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+        1f
+    ) == 0f
+
+    var logoVisible by remember { mutableStateOf(isReducedMotion) }
+    var subtitleVisible by remember { mutableStateOf(isReducedMotion) }
+
+    val logoScale by animateFloatAsState(
+        targetValue = if (logoVisible) 1f else 0.95f,
+        animationSpec = tween(if (isReducedMotion) 0 else 300, easing = LinearOutSlowInEasing),
+        label = "logoScale"
+    )
+    val logoOpacity by animateFloatAsState(
+        targetValue = if (logoVisible) 1f else 0f,
+        animationSpec = tween(if (isReducedMotion) 0 else 300, easing = LinearOutSlowInEasing),
+        label = "logoOpacity"
+    )
+    val subtitleOpacity by animateFloatAsState(
+        targetValue = if (subtitleVisible) 1f else 0f,
+        animationSpec = tween(if (isReducedMotion) 0 else 300, easing = LinearOutSlowInEasing),
+        label = "subtitleOpacity"
+    )
+
+    LaunchedEffect(Unit) {
+        if (!isReducedMotion) {
+            logoVisible = true
+            delay(200)
+            subtitleVisible = true
+        }
+    }
+
     val uiState by viewModel.uiState.collectAsState()
     val supportInfo by viewModel.supportInfo.collectAsState()
     val exportMode by viewModel.exportMode.collectAsState()
-    val isSimulationEnabled by viewModel.isSimulationEnabled.collectAsState()
+    val showAtmosFallbackBanner by viewModel.showAtmosFallbackBanner.collectAsState()
+    val hasSeenOnboarding by viewModel.hasSeenOnboarding.collectAsState()
     val historyFiles by viewModel.historyFiles.collectAsState()
     val playingFile by viewModel.playingFile.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
@@ -119,12 +170,19 @@ fun DecoderAppScreen(
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showHardwareInfoSheet by remember { mutableStateOf(false) }
+    var selectedCodecDetail by remember { mutableStateOf<com.example.audio.CodecDetail?>(null) }
 
     // File picker launcher supporting .ec3, .ac4, .mp4, .m4a, and .ts containers
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
+            try {
+                val takeFlags: Int = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
             viewModel.selectFile(uri)
         }
     }
@@ -136,21 +194,15 @@ fun DecoderAppScreen(
     }
 
     LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            val permissionsToRequest = mutableListOf<String>()
-            if (context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                permissionsToRequest.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-                if (context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    permissionsToRequest.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                }
-            }
-            if (permissionsToRequest.isNotEmpty()) {
-                permissionLauncher.launch(permissionsToRequest.toTypedArray())
-            }
-        }
         viewModel.getExportsDir()
+    }
+
+    if (!hasSeenOnboarding) {
+        com.example.ui.OnboardingScreen(
+            supportInfo = supportInfo,
+            onComplete = { viewModel.completeOnboarding() }
+        )
+        return
     }
 
     Box(
@@ -181,6 +233,8 @@ fun DecoderAppScreen(
                     Box(
                         modifier = Modifier
                             .size(42.dp)
+                            .scale(logoScale)
+                            .alpha(logoOpacity)
                             .clip(CircleShape)
                             .background(Brush.radialGradient(listOf(PurpleGlow.copy(alpha = 0.4f), Color.Transparent)))
                             .border(2.dp, CyberCyan, CircleShape),
@@ -194,7 +248,10 @@ fun DecoderAppScreen(
                         )
                     }
                     Spacer(modifier = Modifier.width(12.dp))
-                    Column {
+                    Column(
+                        modifier = Modifier
+                            .alpha(subtitleOpacity)
+                    ) {
                         Text(
                             text = "REFRACT",
                             fontSize = 22.sp,
@@ -247,12 +304,66 @@ fun DecoderAppScreen(
                 item {
                     CapabilitiesHardwareCard(
                         supportInfo = supportInfo,
-                        isSimulationActive = isSimulationEnabled,
                         showDiagnostics = showDiagnostics,
                         onToggleDiagnostics = { showDiagnostics = !showDiagnostics },
-                        onToggleSimulation = { viewModel.setSimulationEnabled(it) },
-                        onHelpClick = { showHardwareInfoSheet = true }
+                        onHelpClick = { showHardwareInfoSheet = true },
+                        onShowCodecDetails = { selectedCodecDetail = it }
                     )
+                }
+
+                if (showAtmosFallbackBanner) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF2A1F11))
+                                .border(BorderStroke(1.dp, Color(0xFFD3A233).copy(alpha = 0.4f)), RoundedCornerShape(8.dp))
+                                .padding(12.dp)
+                        ) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = "Warning",
+                                            tint = Color(0xFFD3A233),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Fallback Notification",
+                                            color = Color(0xFFD3A233),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { viewModel.dismissFallbackBanner() },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Dismiss",
+                                            tint = CoolGrayText,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Atmos object rendering unavailable on this device. Playing the Dolby Digital Plus 5.1 core instead.",
+                                    color = CoolGrayText,
+                                    fontSize = 11.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+                    }
                 }
 
                 // Core Interactive Stage
@@ -261,7 +372,7 @@ fun DecoderAppScreen(
                         is AudioDecoderViewModel.UIState.Idle -> {
                             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                 FileDropzoneSelector(
-                                    onSelectClick = { filePickerLauncher.launch("*/*") }
+                                    onSelectClick = { filePickerLauncher.launch(arrayOf("*/*")) }
                                 )
 
                                 // Real recent documents library
@@ -273,9 +384,10 @@ fun DecoderAppScreen(
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(start = 4.dp, top = 8.dp)
                                     )
-                                    recentDocsList.forEach { record ->
+                                    recentDocsList.forEachIndexed { index, record ->
                                         RecentFileItem(
                                             record = record,
+                                            index = index,
                                             onLoadClick = {
                                                 viewModel.selectFile(Uri.parse(record.uriString))
                                             }
@@ -407,6 +519,7 @@ fun DecoderAppScreen(
                 defaultSampleRate = defaultSampleRate,
                 exportLocation = exportLocationLabel,
                 isLoudnessReportEnabled = isLoudnessReportEnabled,
+                vulkanAvailable = vulkanAvailable,
                 onToggleWaveform = { viewModel.setWaveformMode(it) },
                 onSelectBitDepth = { viewModel.setDefaultBitDepth(it) },
                 onSelectSampleRate = { viewModel.setDefaultSampleRate(it) },
@@ -416,6 +529,13 @@ fun DecoderAppScreen(
                     showSettingsDialog = false
                 },
                 onDismiss = { showSettingsDialog = false }
+            )
+        }
+
+        selectedCodecDetail?.let { codec ->
+            CodecDetailDialog(
+                codec = codec,
+                onDismiss = { selectedCodecDetail = null }
             )
         }
 
@@ -429,14 +549,151 @@ fun DecoderAppScreen(
 }
 
 @Composable
+fun CodecDetailDialog(codec: CodecDetail, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var copied by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Codec Registry Metadata", color = IceWhite, fontWeight = FontWeight.Black)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = codec.name,
+                    color = CyberCyan,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Text(
+                    text = "Type: ${if (codec.isEncoder) "Encoder" else "Decoder"} • ${if (codec.name.lowercase().contains("google")) "Software" else "Hardware Acceleration"}",
+                    color = CoolGrayText,
+                    fontSize = 12.sp
+                )
+                
+                HorizontalDivider(color = SurfaceBorder)
+                
+                Column {
+                    Text("Supported Mime Type", color = IceWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(codec.mimeType, color = CoolGrayText, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                }
+
+                if (codec.maxChannels > 0) {
+                    Column {
+                        Text("Maximum Target Channels", color = IceWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(codec.maxChannels.toString(), color = CoolGrayText, fontSize = 12.sp)
+                    }
+                }
+
+                if (codec.supportedSampleRates.isNotEmpty()) {
+                    Column {
+                        Text("Supported Frequencies Setup", color = IceWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(codec.supportedSampleRates.joinToString(" Hz, ") + " Hz", color = CoolGrayText, fontSize = 11.sp, lineHeight = 16.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText(
+                        "Codec Details", 
+                        "Name: ${codec.name}\nMime: ${codec.mimeType}\nChannels: ${codec.maxChannels}\nSample Rates: ${codec.supportedSampleRates.joinToString()}"
+                    )
+                    clipboard.setPrimaryClip(clip)
+                    copied = true
+                }
+            ) {
+                Text(if (copied) "COPIED" else "COPY TO CLIPBOARD", color = CyberCyan, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("CLOSE", color = CoolGrayText, fontWeight = FontWeight.Bold)
+            }
+        },
+        containerColor = CardDark,
+        titleContentColor = IceWhite,
+        textContentColor = CoolGrayText
+    )
+}
+
+@Composable
+fun AnimatedCodecRow(
+    title: String,
+    statusText: String,
+    statusColor: Color,
+    isReducedMotion: Boolean,
+    delayMs: Int,
+    onClick: () -> Unit
+) {
+    var visible by remember { mutableStateOf(isReducedMotion) }
+    
+    val offsetX by animateFloatAsState(
+        targetValue = if (visible) 0f else -20f,
+        animationSpec = tween(if (isReducedMotion) 0 else 300, delayMillis = delayMs, easing = LinearOutSlowInEasing),
+        label = "offsetX"
+    )
+    val opacity by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(if (isReducedMotion) 0 else 300, delayMillis = delayMs, easing = LinearOutSlowInEasing),
+        label = "opacity"
+    )
+
+    LaunchedEffect(Unit) {
+        if (!isReducedMotion) {
+            visible = true
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp)
+            .graphicsLayer {
+                translationX = offsetX
+                alpha = opacity
+            },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = title,
+            color = CoolGrayText,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = statusText,
+            color = statusColor,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false).padding(start = 12.dp)
+        )
+    }
+}
+
+@Composable
 fun CapabilitiesHardwareCard(
     supportInfo: DecoderSupportInfo?,
-    isSimulationActive: Boolean,
     showDiagnostics: Boolean,
     onToggleDiagnostics: () -> Unit,
-    onToggleSimulation: (Boolean) -> Unit,
-    onHelpClick: () -> Unit
+    onHelpClick: () -> Unit,
+    onShowCodecDetails: (CodecDetail) -> Unit
 ) {
+    val context = LocalContext.current
+    val isReducedMotion = android.provider.Settings.Global.getFloat(
+        context.contentResolver,
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+        1f
+    ) == 0f
+
     // Dynamic media capability checking elements
     var hasEac3 by remember { mutableStateOf(false) }
     var hasAc4 by remember { mutableStateOf(false) }
@@ -455,6 +712,17 @@ fun CapabilitiesHardwareCard(
             eac3DecoderName = eac3Codec?.name ?: "MpegAudioSoftwareFallback"
         }
     }
+
+    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition()
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.4f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = tween(1000, easing = LinearOutSlowInEasing),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
 
     Card(
         modifier = Modifier
@@ -476,7 +744,8 @@ fun CapabilitiesHardwareCard(
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(if (hasAc4 || isSimulationActive) AcidGreen else RedAlert)
+                            .alpha(if (isReducedMotion) 1f else pulseAlpha)
+                            .background(if (hasAc4) AcidGreen else CyberCyan)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
@@ -488,8 +757,8 @@ fun CapabilitiesHardwareCard(
                 }
 
                 Text(
-                    text = if (isSimulationActive) "VIRTUAL DIRECT" else "HARDWARE ENFORCED",
-                    color = if (isSimulationActive) PurpleGlow else AcidGreen,
+                    text = "HARDWARE ENFORCED",
+                    color = AcidGreen,
                     fontWeight = FontWeight.Black,
                     fontSize = 11.sp,
                     letterSpacing = 0.5.sp
@@ -500,128 +769,49 @@ fun CapabilitiesHardwareCard(
 
             // Dual Badge Matrix Block
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // E-AC3 JOC status badge
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "E-AC3-JOC (Dolby Atmos Objects)",
-                        color = CoolGrayText,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    val isEac3Hw = hasEac3 && !eac3DecoderName.contains("google", ignoreCase = true)
-                    Text(
-                        text = if (hasEac3) (if (isEac3Hw) "✅ Hardware ($eac3DecoderName)" else "✅ Software Fallback ($eac3DecoderName)") else "⚠️ Simulated Rendering",
-                        color = if (hasEac3) (if (isEac3Hw) AcidGreen else CyberCyan) else PurpleGlow,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false).padding(start = 12.dp)
-                    )
+                
+                val eac3Codec = supportInfo?.availableCodecs?.find {
+                    it.mimeType.contains("eac3", ignoreCase = true) && !it.isEncoder
                 }
-
-                // AC-4 IMS status badge
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "AC-4 IMS Binaural",
-                        color = CoolGrayText,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (hasAc4) "✅ Native ($ac4DecoderName)" else "✅ Software fallback active",
-                        color = if (hasAc4) AcidGreen else CyberCyan,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                // AC-4 L4 status badge
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "AC-4 L4 Multichannel Support",
-                        color = CoolGrayText,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = if (Build.VERSION.SDK_INT >= 35) {
-                                if (hasAc4) "✅ Android 15+ Native support" else "⚠️ API 35 (Codecs absent)"
-                            } else {
-                                "⚠️ SDK 35 required (You are on API ${Build.VERSION.SDK_INT})"
-                            },
-                            color = if (Build.VERSION.SDK_INT >= 35 && hasAc4) AcidGreen else RedAlert,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                val isEac3Hw = hasEac3 && !eac3DecoderName.contains("google", ignoreCase = true)
+                AnimatedCodecRow(
+                    title = "E-AC3-JOC (Dolby Atmos Objects)",
+                    statusText = if (hasEac3) (if (isEac3Hw) "✅ Hardware ($eac3DecoderName)" else "✅ Software Fallback ($eac3DecoderName)") else "⚠️ Emulated Engine",
+                    statusColor = if (hasEac3) (if (isEac3Hw) AcidGreen else CyberCyan) else PurpleGlow,
+                    isReducedMotion = isReducedMotion,
+                    delayMs = 0,
+                    onClick = { 
+                        eac3Codec?.let { onShowCodecDetails(it) } 
                     }
-                }
-            }
+                )
 
-            Spacer(modifier = Modifier.height(14.dp))
+                val ac4Codec = supportInfo?.availableCodecs?.find {
+                    it.name == ac4DecoderName
+                } ?: CodecDetail(ac4DecoderName, "audio/ac4", false, 0)
+                AnimatedCodecRow(
+                    title = "AC-4 IMS Binaural",
+                    statusText = if (hasAc4) "✅ Native ($ac4DecoderName)" else "✅ Software fallback active",
+                    statusColor = if (hasAc4) AcidGreen else CyberCyan,
+                    isReducedMotion = isReducedMotion,
+                    delayMs = 80,
+                    onClick = { onShowCodecDetails(ac4Codec) }
+                )
 
-            // Synthetic Simulation Toggle when local hardware lacks licenses
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF131A26))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = Icons.Default.Warning,
-                        contentDescription = "Sim Mode active",
-                        tint = PurpleGlow,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "Synthetic Simulation Stage",
-                            color = IceWhite,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Simulates spatial panning vectors for missing licenses",
-                            color = CoolGrayText,
-                            fontSize = 9.sp
-                        )
-                    }
-                }
-
-                Switch(
-                    checked = isSimulationActive,
-                    onCheckedChange = onToggleSimulation,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = CyberCyan,
-                        checkedTrackColor = CyberCyan.copy(alpha = 0.4f),
-                        uncheckedThumbColor = CoolGrayText,
-                        uncheckedTrackColor = SurfaceBorder
-                    ),
-                    modifier = Modifier
-                        .scale(0.8f)
-                        .testTag("simulation_toggle")
+                AnimatedCodecRow(
+                    title = "AC-4 L4 Multichannel Support",
+                    statusText = if (Build.VERSION.SDK_INT >= 36) {
+                        if (hasAc4) "✅ Native Hardware (Android 16)" else "⚠️ API 36 (Codecs absent)"
+                    } else {
+                        "⚠️ Requires Android 16 (you are on Android ${Build.VERSION.SDK_INT})"
+                    },
+                    statusColor = if (Build.VERSION.SDK_INT >= 36 && hasAc4) AcidGreen else RedAlert,
+                    isReducedMotion = isReducedMotion,
+                    delayMs = 160,
+                    onClick = { onShowCodecDetails(ac4Codec) }
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             // Expandable full system codec registry list trigger
             Row(
@@ -717,16 +907,33 @@ fun CapabilitiesHardwareCard(
 fun FileDropzoneSelector(
     onSelectClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    val isReducedMotion = android.provider.Settings.Global.getFloat(
+        context.contentResolver,
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+        1f
+    ) == 0f
+
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && !isReducedMotion) 0.97f else 1f,
+        animationSpec = tween(80),
+        label = "pressScale"
+    )
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .height(160.dp)
+            .scale(scale)
             .clip(RoundedCornerShape(16.dp))
             .border(
                 BorderStroke(2.dp, Brush.sweepGradient(listOf(CyberCyan, PurpleGlow, CyberCyan))),
                 RoundedCornerShape(16.dp)
             )
-            .clickable { onSelectClick() }
+            .clickable(interactionSource = interactionSource, indication = androidx.compose.foundation.LocalIndication.current) { onSelectClick() }
             .testTag("select_file_button"),
         colors = CardDefaults.cardColors(containerColor = CardDark.copy(alpha = 0.5f))
     ) {
@@ -772,11 +979,42 @@ fun FileDropzoneSelector(
 @Composable
 fun RecentFileItem(
     record: AudioDecoderViewModel.RecentFileRecord,
+    index: Int,
     onLoadClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    val isReducedMotion = android.provider.Settings.Global.getFloat(
+        context.contentResolver,
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+        1f
+    ) == 0f
+
+    var visible by remember { mutableStateOf(isReducedMotion) }
+    
+    val offsetY by animateFloatAsState(
+        targetValue = if (visible) 0f else 20f,
+        animationSpec = tween(if (isReducedMotion) 0 else 300, delayMillis = index * 60, easing = LinearOutSlowInEasing),
+        label = "offsetY"
+    )
+    val opacity by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(if (isReducedMotion) 0 else 300, delayMillis = index * 60, easing = LinearOutSlowInEasing),
+        label = "opacity"
+    )
+
+    LaunchedEffect(Unit) {
+        if (!isReducedMotion) {
+            visible = true
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                translationY = offsetY
+                alpha = opacity
+            }
             .clickable { onLoadClick() }
             .border(BorderStroke(1.dp, SurfaceBorder), RoundedCornerShape(10.dp)),
         colors = CardDefaults.cardColors(containerColor = CardDark.copy(alpha = 0.4f))
@@ -1276,6 +1514,12 @@ fun ProcessingCard(
     statusMsg: String,
     estSecondsRemaining: Int
 ) {
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress,
+        animationSpec = tween(200, easing = LinearOutSlowInEasing),
+        label = "progress"
+    )
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1318,7 +1562,7 @@ fun ProcessingCard(
             Spacer(modifier = Modifier.height(16.dp))
 
             LinearProgressIndicator(
-                progress = { progress },
+                progress = { animatedProgress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp)
@@ -1882,6 +2126,7 @@ fun SystemSettingsDialog(
     defaultSampleRate: Int,
     exportLocation: String,
     isLoudnessReportEnabled: Boolean,
+    vulkanAvailable: Boolean,
     onToggleWaveform: (Boolean) -> Unit,
     onSelectBitDepth: (Int) -> Unit,
     onSelectSampleRate: (Int) -> Unit,
@@ -1889,6 +2134,7 @@ fun SystemSettingsDialog(
     onClearHistory: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -2010,6 +2256,18 @@ fun SystemSettingsDialog(
 
                 HorizontalDivider(color = SurfaceBorder)
 
+                // Graphics API
+                Column {
+                    val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                    val glVersion = am.deviceConfigurationInfo.glEsVersion
+                    
+                    Text("Graphics API", color = IceWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(if (vulkanAvailable) "Vulkan Enabled" else "OpenGL ES (version $glVersion fallback)", color = AcidGreen, fontSize = 11.sp)
+                }
+
+                HorizontalDivider(color = SurfaceBorder)
+
                 // Pure database and metadata wipe
                 Button(
                     onClick = onClearHistory,
@@ -2067,7 +2325,7 @@ fun HardwareInfoDialog(
                 Text(
                     "• Dolby AC-4 Profiles:\n" +
                     "AC-4 IMS is designed for Immersive Stereo Binaural environments, ideal for headphones.\n" +
-                    "AC-4 L4 supports discrete multichannel up to 7.1.4 heights, requiring Android 15 (API 35/36) compatibility for native hardware operations.",
+                    "AC-4 L4 supports discrete multichannel up to 7.1.4 heights, requiring Android 16 (API 36) compatibility for native hardware operations.",
                     color = IceWhite,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
@@ -2114,9 +2372,36 @@ fun ErrorDisplayCard(
     message: String,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val isReducedMotion = android.provider.Settings.Global.getFloat(
+        context.contentResolver,
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+        1f
+    ) == 0f
+
+    val offsetX = remember { androidx.compose.animation.core.Animatable(0f) }
+
+    LaunchedEffect(Unit) {
+        if (!isReducedMotion) {
+            offsetX.animateTo(
+                targetValue = 0f,
+                animationSpec = androidx.compose.animation.core.keyframes {
+                    durationMillis = 400
+                    0f at 0
+                    -8f at 80
+                    8f at 160
+                    -4f at 240
+                    4f at 320
+                    0f at 400
+                }
+            )
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer { translationX = offsetX.value }
             .border(BorderStroke(1.dp, RedAlert.copy(alpha = 0.5f)), RoundedCornerShape(16.dp))
             .testTag("error_card"),
         colors = CardDefaults.cardColors(containerColor = CardDark)
@@ -2139,11 +2424,14 @@ fun ErrorDisplayCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                message,
+                text = if (message.contains("Permission Denial", ignoreCase = true) || message.contains("SecurityException", ignoreCase = true)) {
+                    "File access was denied. Please re-select the file from the file picker."
+                } else {
+                    message
+                },
                 color = IceWhite,
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
-                fontFamily = FontFamily.Monospace,
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center
             )
@@ -2158,7 +2446,12 @@ fun ErrorDisplayCard(
                 colors = ButtonDefaults.buttonColors(containerColor = SurfaceBorder),
                 shape = RoundedCornerShape(10.dp)
             ) {
-                Text("DISMISS ERRORS", color = IceWhite, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(
+                    text = if (message.contains("Permission Denial", ignoreCase = true) || message.contains("SecurityException", ignoreCase = true)) "Re-open File" else "DISMISS ERRORS",
+                    color = IceWhite,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
             }
         }
     }

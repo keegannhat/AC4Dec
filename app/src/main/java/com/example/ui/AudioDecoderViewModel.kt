@@ -79,8 +79,11 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
     private val _exportMode = MutableStateFlow(ExportMode.StereoBinauralWav)
     val exportMode: StateFlow<ExportMode> = _exportMode.asStateFlow()
 
-    private val _isSimulationEnabled = MutableStateFlow(false)
-    val isSimulationEnabled: StateFlow<Boolean> = _isSimulationEnabled.asStateFlow()
+    private val _showAtmosFallbackBanner = MutableStateFlow(false)
+    val showAtmosFallbackBanner: StateFlow<Boolean> = _showAtmosFallbackBanner.asStateFlow()
+
+    private val _hasSeenOnboarding = MutableStateFlow(prefs.getBoolean("hasSeenOnboarding", false))
+    val hasSeenOnboarding: StateFlow<Boolean> = _hasSeenOnboarding.asStateFlow()
 
     private val _historyFiles = MutableStateFlow<List<File>>(emptyList())
     val historyFiles: StateFlow<List<File>> = _historyFiles.asStateFlow()
@@ -237,8 +240,13 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
         prefs.edit().putBoolean("loudness_report_enabled", enabled).apply()
     }
 
-    fun setSimulationEnabled(enabled: Boolean) {
-        _isSimulationEnabled.value = enabled
+    fun dismissFallbackBanner() {
+        _showAtmosFallbackBanner.value = false
+    }
+
+    fun completeOnboarding() {
+        prefs.edit().putBoolean("hasSeenOnboarding", true).apply()
+        _hasSeenOnboarding.value = true
     }
 
     fun setMasterVolume(vol: Float) {
@@ -266,10 +274,6 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
     private fun checkDecoderSupport() {
         val info = DolbyAc4Decoder.checkAc4Support()
         _supportInfo.value = info
-        // Default simulator dynamic triggers
-        if (!info.hasAc4Decoder) {
-            _isSimulationEnabled.value = true
-        }
     }
 
     fun loadHistory() {
@@ -389,7 +393,11 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                 _uiState.value = UIState.FileSelected(uri, name, metadata)
                 
             } catch (e: Exception) {
-                _uiState.value = UIState.Error("Diagnostic bitstream parsing failed: ${e.localizedMessage}")
+                if (e is SecurityException || e.message?.contains("Permission", ignoreCase = true) == true) {
+                    _uiState.value = UIState.Error("File access was denied. Please re-select the file from the file picker.")
+                } else {
+                    _uiState.value = UIState.Error("Diagnostic bitstream parsing failed: ${e.localizedMessage}")
+                }
             }
         }
     }
@@ -414,37 +422,26 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
 
     fun getExportsDir(): File {
         val context = getApplication<Application>()
-        val extState = Environment.getExternalStorageState()
-        if (Environment.MEDIA_MOUNTED == extState) {
-            val publicDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Refract")
-            try {
-                if (!publicDir.exists()) {
-                    publicDir.mkdirs()
-                }
-                // Try writing a small dummy file to verify write access
-                val dummy = File(publicDir, ".write_test")
-                if (dummy.createNewFile()) {
-                    dummy.delete()
-                }
-                _exportLocationLabel.value = publicDir.absolutePath
-                return publicDir
-            } catch (e: Exception) {
-                e.printStackTrace()
+        val privateDir = File(context.cacheDir, "exports").apply { mkdirs() }
+        _exportLocationLabel.value = "MediaStore.Downloads"
+        return privateDir
+    }
+
+    private fun copyFileToMediaStoreDownloads(context: Context, sourceFile: File, mimeType: String) {
+        val resolver = context.contentResolver
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, sourceFile.name)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/Refract")
             }
         }
-        
-        // Fallback to external files dir (publicly visible in Android/data/... but does not require any permission)
-        val extFilesDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-        if (extFilesDir != null) {
-            val subdir = File(extFilesDir, "Refract").apply { mkdirs() }
-            _exportLocationLabel.value = subdir.absolutePath
-            return subdir
+        val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+        if (uri != null) {
+            resolver.openOutputStream(uri)?.use { outStream ->
+                sourceFile.inputStream().use { it.copyTo(outStream) }
+            }
         }
-        
-        // Fallback to internal private folder
-        val privateDir = File(context.filesDir, "exports").apply { mkdirs() }
-        _exportLocationLabel.value = privateDir.absolutePath
-        return privateDir
     }
 
     fun startDecoding() {
@@ -466,7 +463,6 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                         context = context,
                         inputUri = state.uri,
                         outputPcmFile = cachePcmFile,
-                        isSimulationEnabled = _isSimulationEnabled.value,
                         onProgress = { progress ->
                             val currentState = _uiState.value
                             if (currentState is UIState.Processing) {
@@ -484,6 +480,9 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                             }
                         },
                         onStatusUpdate = { status ->
+                            if (status == "5.1 core extraction · Software fallback") {
+                                _showAtmosFallbackBanner.value = true
+                            }
                             val currentState = _uiState.value
                             if (currentState is UIState.Processing) {
                                 _uiState.value = currentState.copy(status = status)
@@ -590,6 +589,18 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                     }
 
                     if (cachePcmFile.exists()) cachePcmFile.delete()
+
+                    // Export all files to MediaStore.Downloads
+                    finalFiles.forEach { file ->
+                        val mime = when (file.extension.lowercase(Locale.getDefault())) {
+                            "wav" -> "audio/wav"
+                            "flac" -> "audio/flac"
+                            "zip" -> "application/zip"
+                            "txt" -> "text/plain"
+                            else -> "application/octet-stream"
+                        }
+                        copyFileToMediaStoreDownloads(context, file, mime)
+                    }
                 }
 
                 _uiState.value = UIState.Success(
@@ -600,7 +611,11 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                 loadHistory()
 
             } catch (e: Exception) {
-                _uiState.value = UIState.Error("Immersive processing pipe crash: ${e.localizedMessage}")
+                if (e is SecurityException || e.message?.contains("Permission", ignoreCase = true) == true) {
+                    _uiState.value = UIState.Error("File access was denied. Please re-select the file from the file picker.")
+                } else {
+                    _uiState.value = UIState.Error("Immersive processing pipe crash: ${e.localizedMessage}")
+                }
             }
         }
     }
@@ -626,7 +641,7 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
         writer.println("Estimated Bitrate: " + (meta.bitRate / 1000) + " kbps")
         writer.println("Sampling Frequency: " + _defaultSampleRate.value + " Hz")
         writer.println("Quantization Depth: " + _defaultBitDepth.value + "-bit")
-        writer.println("Atmos Render Mode: " + if (_isSimulationEnabled.value) "High Fidelity simulation fallback" else "Hardware MediaCodec Native direct spatial track")
+        writer.println("Atmos Render Mode: " + if (_speakerConfig.value.contains("Binaural", ignoreCase = true)) "AC-4 IMS Binaural (Object mix downmix 2ch)" else "Hardware MediaCodec Native direct spatial track")
         writer.println("==============================================")
         writer.println("LOUDNESS ANALYSIS LOG DETAILS (BS.1770-4)")
         writer.println("----------------------------------------------")

@@ -216,43 +216,32 @@ object DolbyAc4Decoder {
     }
 
     /**
-     * Decodes Dolby AC-4 using MediaCodec if supported, or falls back to synthetic high-fidelity 
-     * multichannel audio simulation.
+     * Decodes Dolby AC-4/E-AC3 using MediaCodec if supported, or falls back to software DD+ 5.1 core.
      */
     suspend fun decode(
         context: Context,
         inputUri: Uri,
         outputPcmFile: File,
-        isSimulationEnabled: Boolean,
         onProgress: (Float) -> Unit,
         onStatusUpdate: (String) -> Unit
     ): DecodedMetadata = withContext(Dispatchers.IO) {
         val supportInfo = checkAc4Support()
-        val usesSimulation = isSimulationEnabled || !supportInfo.hasAc4Decoder
 
-        if (usesSimulation) {
-            onStatusUpdate("Initializing high-fidelity simulation engine...")
-            val simulatedMetadata = extractMetadata(context, inputUri)
-            simulateMultichannelPcm(outputPcmFile, simulatedMetadata.channelCount, simulatedMetadata.sampleRate, onProgress, onStatusUpdate)
-            return@withContext simulatedMetadata.copy(isSimulated = true)
-        }
-
-        // REAL DECODING PATH
-        onStatusUpdate("Extracting Dolby AC-4 container...")
+        var trackIndex = -1
+        var format: MediaFormat? = null
+        var mime: String? = null
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         var bos: BufferedOutputStream? = null
         
         try {
             extractor.setDataSource(context, inputUri, null)
-            var trackIndex = -1
-            var format: MediaFormat? = null
-            var mime: String? = null
 
             for (i in 0 until extractor.trackCount) {
                 val trackFormat = extractor.getTrackFormat(i)
                 val trackMime = trackFormat.getString(MediaFormat.KEY_MIME) ?: ""
-                if (trackMime.contains("ac4", ignoreCase = true) || trackMime.contains("dolby-ac4", ignoreCase = true)) {
+                if (trackMime.contains("ac4", ignoreCase = true) || trackMime.contains("dolby-ac4", ignoreCase = true) ||
+                    trackMime.contains("eac3", ignoreCase = true) || trackMime.contains("dolby-eac3", ignoreCase = true)) {
                     trackIndex = i
                     format = trackFormat
                     mime = trackMime
@@ -261,24 +250,41 @@ object DolbyAc4Decoder {
             }
 
             if (trackIndex == -1 || format == null || mime == null) {
-                throw IOException("No Dolby AC-4 audio tracks patterns found in file.")
+                throw IOException("No Dolby AC-4 or E-AC3 audio tracks found in file.")
             }
 
             extractor.selectTrack(trackIndex)
             
-            onStatusUpdate("Configuring native Dolby AC-4 decoder...")
-            // Create decoder
-            codec = MediaCodec.createDecoderByType(mime)
+            val isEac3 = mime.contains("eac3", ignoreCase = true)
+            // Check if hardware object decoder is available for EAC3
+            val hasHardwareObjectDecoder = supportInfo.availableCodecs.any { 
+                it.mimeType.contains("eac3", ignoreCase = true) && !it.isEncoder && it.name.lowercase(Locale.getDefault()).contains("google").not()
+            }
+
+            val codecName: String
+            if (isEac3 && hasHardwareObjectDecoder) {
+                onStatusUpdate("Object rendering · Hardware")
+                codecName = supportInfo.availableCodecs.first { it.mimeType.contains("eac3", ignoreCase = true) && !it.isEncoder && it.name.lowercase(Locale.getDefault()).contains("google").not() }.name
+                codec = MediaCodec.createByCodecName(codecName)
+            } else if (isEac3 && !hasHardwareObjectDecoder) {
+                onStatusUpdate("5.1 core extraction · Software fallback")
+                codec = MediaCodec.createDecoderByType(mime)
+            } else {
+                onStatusUpdate("Configuring native Dolby AC-4 decoder...")
+                codec = MediaCodec.createDecoderByType(mime) // Try standard type allocation
+            }
+
             codec.configure(format, null, null, 0)
             codec.start()
 
             bos = BufferedOutputStream(FileOutputStream(outputPcmFile))
-            // Placeholder WAV header (will update later since size is unknown)
             val channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val durationUs = format.getLong(MediaFormat.KEY_DURATION)
             
             WavHelper.writeWavHeader(channelCount, sampleRate, 16, 0, bos)
+
+            // We must determine the output buffers logic
 
             val inputBuffers = codec.inputBuffers
             val outputBuffers = codec.outputBuffers
@@ -379,79 +385,6 @@ object DolbyAc4Decoder {
             try { extractor.release() } catch (e: Exception) {}
             try { codec?.stop(); codec?.release() } catch (e: Exception) {}
             try { bos?.close() } catch (e: Exception) {}
-        }
-    }
-
-    /**
-     * Simulation method: Synthesizes high-fidelity 5.1 multichannel audio with separate panning frequencies
-     * to verify the splitting and downmixing tools work beautifully.
-     */
-    private suspend fun simulateMultichannelPcm(
-        outputFile: File,
-        channelCount: Int,
-        sampleRate: Int,
-        onProgress: (Float) -> Unit,
-        onStatusUpdate: (String) -> Unit
-    ) {
-        val durationSeconds = 10
-        val totalSamples = sampleRate * durationSeconds
-        val bytesPerSample = 2 // 16-bit PCM
-        val frameSize = channelCount * bytesPerSample
-        val totalDataSize = totalSamples.toLong() * frameSize
-
-        onStatusUpdate("Synthesizing multi-channel sound stage components...")
-
-        FileOutputStream(outputFile).use { fos ->
-            // Write Wav Header
-            WavHelper.writeWavHeader(channelCount, sampleRate, 16, totalDataSize, fos)
-
-            // Split into buffer iterations
-            val bufferFrames = 1024
-            val buffer = ByteBuffer.allocate(bufferFrames * frameSize).order(ByteOrder.LITTLE_ENDIAN)
-
-            // Define individual panning frequencies for distinct channels
-            // 5.1 sequence frequencies: L=440Hz, R=554Hz, C=659Hz, LFE=50Hz, Ls=880Hz, Rs=1108Hz
-            // Stereo sequence frequencies: L=440Hz, R=880Hz
-            val freqs = when (channelCount) {
-                1 -> doubleArrayOf(440.0)
-                2 -> doubleArrayOf(440.0, 880.0)
-                6 -> doubleArrayOf(440.0, 554.0, 659.0, 50.0, 880.0, 1108.0)
-                else -> DoubleArray(channelCount) { 440.0 * (1.0 + (it * 0.2)) }
-            }
-
-            var frameCount = 0
-            while (frameCount < totalSamples) {
-                buffer.clear()
-                val chunkFrames = minOf(bufferFrames, totalSamples - frameCount)
-                
-                for (f in 0 until chunkFrames) {
-                    val sampleIndex = frameCount + f
-                    val t = sampleIndex.toDouble() / sampleRate
-                    
-                    for (c in 0 until channelCount) {
-                        val freq = freqs[c]
-                        // Generate sine amplitude wave
-                        var amp = sin(2.0 * Math.PI * freq * t)
-                        
-                        // LFE is a sub-bass LFE LFE sweep
-                        if (c == 3 && channelCount == 6) {
-                            amp = sin(2.0 * Math.PI * (50.5 + 20 * sin(t)) * t)
-                        }
-                        
-                        // Scale amplitude
-                        val scaled = (amp * 16384.0).toInt().coerceIn(-32768, 32767).toShort()
-                        buffer.putShort(scaled)
-                    }
-                }
-                
-                fos.write(buffer.array(), 0, chunkFrames * frameSize)
-                frameCount += chunkFrames
-                onProgress(frameCount.toFloat() / totalSamples)
-                
-                if (frameCount % (sampleRate * 2) == 0) {
-                    onStatusUpdate("Rendering immersive frame chunk ${frameCount / sampleRate}s...")
-                }
-            }
         }
     }
 }
