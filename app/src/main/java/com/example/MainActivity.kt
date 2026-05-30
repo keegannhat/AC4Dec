@@ -235,21 +235,21 @@ fun DecoderAppScreen(
         )
         Canvas(modifier = Modifier.fillMaxSize()) {
             val center1 = Offset(
-                x = size.width * 0.2f + (cos(phase) * size.width * 0.15f),
-                y = size.height * 0.2f + (sin(phase) * size.height * 0.1f)
+                x = size.width * 0.2f + (kotlin.math.cos(phase) * size.width * 0.15f),
+                y = size.height * 0.2f + (kotlin.math.sin(phase) * size.height * 0.1f)
             )
             val center2 = Offset(
-                x = size.width * 0.8f + (cos(phase + 2f) * size.width * 0.2f),
-                y = size.height * 0.4f + (sin(phase + 1f) * size.height * 0.15f)
+                x = size.width * 0.8f + (kotlin.math.cos(phase + 2f) * size.width * 0.2f),
+                y = size.height * 0.4f + (kotlin.math.sin(phase + 1f) * size.height * 0.15f)
             )
             val center3 = Offset(
-                x = size.width * 0.5f + (cos(phase + 4f) * size.width * 0.15f),
-                y = size.height * 0.8f + (sin(phase + 3f) * size.height * 0.15f)
+                x = size.width * 0.5f + (kotlin.math.cos(phase + 4f) * size.width * 0.15f),
+                y = size.height * 0.8f + (kotlin.math.sin(phase + 3f) * size.height * 0.15f)
             )
 
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(Color(0xFF006D69).copy(alpha = 0.3f), Color.Transparent),
+                    colors = listOf(Color(0xFFFF9F0A).copy(alpha = 0.15f), Color.Transparent),
                     center = center1,
                     radius = size.width * 0.6f
                 ),
@@ -258,7 +258,7 @@ fun DecoderAppScreen(
             )
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(Color(0xFF8B1A00).copy(alpha = 0.25f), Color.Transparent),
+                    colors = listOf(Color(0xFFFF5E00).copy(alpha = 0.12f), Color.Transparent),
                     center = center2,
                     radius = size.width * 0.8f
                 ),
@@ -267,7 +267,7 @@ fun DecoderAppScreen(
             )
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(Color(0xFF0B1736).copy(alpha = 0.5f), Color.Transparent),
+                    colors = listOf(Color(0xFF200A03).copy(alpha = 0.3f), Color.Transparent),
                     center = center3,
                     radius = size.width * 0.7f
                 ),
@@ -681,7 +681,7 @@ fun CodecDetailDialog(codec: CodecDetail, onDismiss: () -> Unit) {
                 Text("CLOSE", color = CoolGrayText, fontWeight = FontWeight.Bold)
             }
         },
-        containerColor = CardDark,
+        containerColor = Color(0xFF131316),
         titleContentColor = IceWhite,
         textContentColor = CoolGrayText
     )
@@ -1454,18 +1454,35 @@ fun FileSelectedCard(
                             speakerJoints.add("Lbs" to Offset(cx - radius * 0.5f, cy + radius * 0.8f))
                             speakerJoints.add("Rbs" to Offset(cx + radius * 0.5f, cy + radius * 0.8f))
                         }
-                        "7.1.4", "9.1.6" -> {
+                        "7.1.4" -> {
                             speakerJoints.add("L" to Offset(cx - radius * 0.707f, cy - radius * 0.707f))
                             speakerJoints.add("R" to Offset(cx + radius * 0.707f, cy - radius * 0.707f))
                             speakerJoints.add("C" to Offset(cx, cy - radius * 0.95f))
-                            speakerJoints.add("LFE" to Offset(cx / 1.5f, cy - radius * 0.4f))
+                            speakerJoints.add("LFE" to Offset(cx - radius * 0.3f, cy - radius * 0.5f))
                             speakerJoints.add("Ls" to Offset(cx - radius * 0.98f, cy))
                             speakerJoints.add("Rs" to Offset(cx + radius * 0.98f, cy))
                             speakerJoints.add("Lbs" to Offset(cx - radius * 0.5f, cy + radius * 0.8f))
                             speakerJoints.add("Rbs" to Offset(cx + radius * 0.5f, cy + radius * 0.8f))
-                            // Heights (Neon Magenta dots)
                             speakerJoints.add("Ltf" to Offset(cx - radius * 0.4f, cy - radius * 0.4f))
                             speakerJoints.add("Rtf" to Offset(cx + radius * 0.4f, cy - radius * 0.4f))
+                            speakerJoints.add("Ltr" to Offset(cx - radius * 0.4f, cy + radius * 0.4f))
+                            speakerJoints.add("Rtr" to Offset(cx + radius * 0.4f, cy + radius * 0.4f))
+                        }
+                        "9.1.6" -> {
+                            speakerJoints.add("L" to Offset(cx - radius * 0.707f, cy - radius * 0.707f))
+                            speakerJoints.add("R" to Offset(cx + radius * 0.707f, cy - radius * 0.707f))
+                            speakerJoints.add("C" to Offset(cx, cy - radius * 0.95f))
+                            speakerJoints.add("LFE" to Offset(cx - radius * 0.3f, cy - radius * 0.5f))
+                            speakerJoints.add("Lss" to Offset(cx - radius * 0.98f, cy - radius * 0.35f))
+                            speakerJoints.add("Rss" to Offset(cx + radius * 0.98f, cy - radius * 0.35f))
+                            speakerJoints.add("Ls" to Offset(cx - radius * 0.98f, cy + radius * 0.2f))
+                            speakerJoints.add("Rs" to Offset(cx + radius * 0.98f, cy + radius * 0.2f))
+                            speakerJoints.add("Lbs" to Offset(cx - radius * 0.5f, cy + radius * 0.8f))
+                            speakerJoints.add("Rbs" to Offset(cx + radius * 0.5f, cy + radius * 0.8f))
+                            speakerJoints.add("Ltf" to Offset(cx - radius * 0.4f, cy - radius * 0.4f))
+                            speakerJoints.add("Rtf" to Offset(cx + radius * 0.4f, cy - radius * 0.4f))
+                            speakerJoints.add("Ltm" to Offset(cx - radius * 0.35f, cy))
+                            speakerJoints.add("Rtm" to Offset(cx + radius * 0.35f, cy))
                             speakerJoints.add("Ltr" to Offset(cx - radius * 0.4f, cy + radius * 0.4f))
                             speakerJoints.add("Rtr" to Offset(cx + radius * 0.4f, cy + radius * 0.4f))
                         }
@@ -1478,10 +1495,17 @@ fun FileSelectedCard(
                         val label = pair.first
                         val pos = pair.second
                         val isHeight = label.startsWith("Lt") || label.startsWith("Rt")
+                        val isLfe = label == "LFE"
+
+                        val dotColor = when {
+                            isLfe    -> Color(0xFFFFB300)
+                            isHeight -> PurpleGlow
+                            else     -> CyberCyan
+                        }
 
                         // glowing matrix rings
-                        drawCircle(if (isHeight) PurpleGlow else CyberCyan, radius = 5f, center = pos)
-                        drawCircle(if (isHeight) PurpleGlow.copy(alpha = 0.3f) else CyberCyan.copy(alpha = 0.3f), radius = 10f, center = pos, style = Stroke(width = 1.5f))
+                        drawCircle(dotColor, radius = 5f, center = pos)
+                        drawCircle(dotColor.copy(alpha = 0.3f), radius = 10f, center = pos, style = Stroke(width = 1.5f))
                     }
                 }
             }
@@ -2393,7 +2417,7 @@ fun SystemSettingsDialog(
                 }
             }
         },
-        containerColor = CardDark
+        containerColor = Color(0xFF131316)
     )
 }
 
@@ -2441,7 +2465,7 @@ fun HardwareInfoDialog(
                 )
             }
         },
-        containerColor = CardDark
+        containerColor = Color(0xFF131316)
     )
 }
 
@@ -2615,18 +2639,12 @@ fun HistoryFileItem(
     val isReport = file.extension == "txt"
     val isZip = file.extension == "zip"
     
-    Box(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(
-                Brush.horizontalGradient(
-                    colors = if (isReport) listOf(Color(0xFF8B1A00).copy(alpha = 0.5f), Color(0xFFC93000).copy(alpha = 0.5f)) 
-                             else (if (isZip) listOf(Color(0xFF006D69).copy(alpha = 0.5f), Color(0xFF00A380).copy(alpha = 0.5f))
-                             else listOf(Color(0xFF0D6B78).copy(alpha = 0.5f), Color(0xFF003844).copy(alpha = 0.5f)))
-                )
-            )
-            .border(1.dp, SurfaceBorder, RoundedCornerShape(24.dp))
+            .border(BorderStroke(1.dp, SurfaceBorder), RoundedCornerShape(12.dp))
+            .testTag("history_item"),
+        colors = CardDefaults.cardColors(containerColor = CardDark)
     ) {
         Row(
             modifier = Modifier
@@ -2641,68 +2659,69 @@ fun HistoryFileItem(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color.White),
+                        .background(
+                            if (isReport) PurpleGlow.copy(alpha = 0.2f) 
+                            else (if (isZip) AcidGreen.copy(alpha = 0.2f) else CyberCyan.copy(alpha = 0.2f))
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = if (isReport) Icons.Default.Info else (if (isZip) Icons.Default.CheckCircle else Icons.Default.PlayArrow),
                         contentDescription = "music logo",
-                        tint = if (isReport) Color(0xFFFF3B30) else (if (isZip) Color(0xFF34C759) else Color(0xFF0D6B78)),
-                        modifier = Modifier.size(24.dp)
+                        tint = if (isReport) PurpleGlow else (if (isZip) AcidGreen else CyberCyan),
+                        modifier = Modifier.size(16.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(10.dp))
 
                 Column {
                     Text(
                         text = file.name,
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 18.sp,
+                        color = IceWhite,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = if (isReport) "Loudness specifications text report" else "${String.format(Locale.getDefault(), "%.1f", file.length() / (1024f * 1024f))} MB • ${file.extension.uppercase()}",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontWeight = FontWeight.Light,
-                        fontSize = 13.sp
+                        color = CoolGrayText,
+                        fontSize = 10.sp
                     )
                 }
             }
 
             // Quick Actions
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row {
                 if (!isReport && !isZip) {
-                    IconButton(onClick = onPlayPause, modifier = Modifier.size(36.dp).background(Color.White.copy(alpha=0.15f), CircleShape)) {
+                    IconButton(onClick = onPlayPause, modifier = Modifier.size(32.dp)) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Default.Close else Icons.Default.PlayArrow,
                             contentDescription = "play/pause",
-                            tint = Color.White,
+                            tint = CyberCyan,
                             modifier = Modifier.size(18.dp)
                         )
                     }
                 }
-                
-                IconButton(onClick = onShare, modifier = Modifier.size(36.dp).background(Color.White.copy(alpha=0.15f), CircleShape)) {
+
+                IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
                     Icon(
                         imageVector = Icons.Default.Share,
                         contentDescription = "share",
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp)
+                        tint = IceWhite,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
-                
-                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp).background(Color.White.copy(alpha=0.1f), CircleShape)) {
+
+                IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "delete",
-                        tint = Color.White.copy(alpha=0.7f),
-                        modifier = Modifier.size(18.dp)
+                        tint = RedAlert,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }
