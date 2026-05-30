@@ -8,6 +8,9 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
+import com.arthenica.ffmpegkit.FFmpegKit
+import com.arthenica.ffmpegkit.FFprobeKit
+import com.arthenica.ffmpegkit.ReturnCode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -206,6 +209,8 @@ object DolbyAc4Decoder {
         val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
         val ac4Decoders = mutableListOf<String>()
         val eac3Decoders = mutableListOf<String>()
+        val trueHdDecoders = mutableListOf<String>()
+        val dtsDecoders = mutableListOf<String>()
         val allAudioCodecs = mutableListOf<CodecDetail>()
 
         for (info in codecList.codecInfos) {
@@ -232,14 +237,23 @@ object DolbyAc4Decoder {
                             supportedSampleRates = sampleRates
                         )
                     )
-                }
 
-                if (!info.isEncoder) {
-                    if (type.equals("audio/ac4", ignoreCase = true) || type.equals("audio/dolby-ac4", ignoreCase = true)) {
-                        ac4Decoders.add(info.name)
-                    }
-                    if (type.equals("audio/eac3", ignoreCase = true) || type.equals("audio/dolby-eac3", ignoreCase = true)) {
-                        eac3Decoders.add(info.name)
+                    if (!info.isEncoder) {
+                        when {
+                            type.equals("audio/ac4", ignoreCase = true) ||
+                            type.equals("audio/dolby-ac4", ignoreCase = true) ->
+                                ac4Decoders.add(info.name)
+                            type.equals("audio/eac3", ignoreCase = true) ||
+                            type.equals("audio/dolby-eac3", ignoreCase = true) ->
+                                eac3Decoders.add(info.name)
+                            type.contains("true-hd", ignoreCase = true) ||
+                            type.contains("truehd", ignoreCase = true) ||
+                            type.equals("audio/mlp", ignoreCase = true) ->
+                                trueHdDecoders.add(info.name)
+                            type.contains("vnd.dts", ignoreCase = true) ||
+                            type.equals("audio/dts", ignoreCase = true) ->
+                                dtsDecoders.add(info.name)
+                        }
                     }
                 }
             }
@@ -248,7 +262,15 @@ object DolbyAc4Decoder {
         return DecoderSupportInfo(
             hasAc4Decoder = ac4Decoders.isNotEmpty(),
             ac4DecoderNames = ac4Decoders,
-            availableCodecs = allAudioCodecs.distinctBy { it.name }
+            availableCodecs = allAudioCodecs.distinctBy { it.name },
+            hasTrueHdHardwareDecoder = trueHdDecoders.isNotEmpty(),
+            trueHdDecoderNames = trueHdDecoders,
+            hasDtsHardwareDecoder = dtsDecoders.isNotEmpty(),
+            dtsDecoderNames = dtsDecoders,
+            // Software always available via ffmpeg-kit-android-audio
+            hasSoftwareTrueHd = true,
+            hasSoftwareDts = true,
+            hasSoftwareEac3 = true
         )
     }
 
@@ -382,7 +404,10 @@ object DolbyAc4Decoder {
                 codecName = supportInfo.availableCodecs.first { it.mimeType.contains("eac3", ignoreCase = true) && !it.isEncoder && it.name.lowercase(Locale.getDefault()).contains("google").not() }.name
                 codec = MediaCodec.createByCodecName(codecName)
             } else if (isEac3 && !hasHardwareObjectDecoder) {
-                onStatusUpdate("DD+ 5.1 core · Software fallback")
+                // Software fallback: uses Android's built-in Google EAC3 SW decoder.
+                // For devices with ffmpeg-kit-android-audio, this gives access to the
+                // full EAC3 decoder via FfmpegExportHelper.decodeToWav() as an alternative.
+                onStatusUpdate("DD+ 5.1 core · Software fallback (Google SW)")
                 codec = MediaCodec.createDecoderByType(mime)
             } else {
                 onStatusUpdate("Configuring decoder...")
@@ -539,6 +564,92 @@ object DolbyAc4Decoder {
             try { extractor.release() } catch (e: Exception) {}
             try { codec?.stop(); codec?.release() } catch (e: Exception) {}
             try { bos?.close() } catch (e: Exception) {}
+        }
+    /**
+     * Decodes an EAC3/DD+JOC file using FFmpegKit (software, no license needed).
+     * Use this when hardware MediaCodec EAC3 decoder is unavailable.
+     * Produces a WAV file at [outputPcmFile].
+     */
+    suspend fun decodeEac3Software(
+        context: Context,
+        inputUri: Uri,
+        outputPcmFile: File,
+        targetBitsPerSample: Int,
+        onProgress: suspend (Float) -> Unit,
+        onStatusUpdate: suspend (String) -> Unit
+    ): DecodedMetadata = withContext(Dispatchers.IO) {
+        withContext(Dispatchers.Main) {
+            onStatusUpdate("DD+JOC · FFmpeg software decoder (eac3)")
+        }
+        val tempInput = SoftwareDecoderHelper.copyUriToTemp(context, inputUri, "eac3_input.ec3")
+        try {
+            // Probe metadata first
+            val probeSession = FFprobeKit.execute(
+                "-v quiet -print_format json -show_streams \"${tempInput.absolutePath}\""
+            )
+            var channels = 6; var sampleRate = 48000; var durationUs = 0L; var bitRate = 640000
+            try {
+                // Parse JSON: look for streams[0].channels, sample_rate, duration, bit_rate
+                val output = probeSession.output ?: ""
+                val chMatch = Regex("\"channels\"\\s*:\\s*(\\d+)").find(output)
+                val srMatch = Regex("\"sample_rate\"\\s*:\\s*\"(\\d+)\"").find(output)
+                val durMatch = Regex("\"duration\"\\s*:\\s*\"([0-9.]+)\"").find(output)
+                val brMatch = Regex("\"bit_rate\"\\s*:\\s*\"(\\d+)\"").find(output)
+                channels = chMatch?.groupValues?.get(1)?.toIntOrNull() ?: channels
+                sampleRate = srMatch?.groupValues?.get(1)?.toIntOrNull() ?: sampleRate
+                durationUs = ((durMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0) * 1_000_000).toLong()
+                bitRate = brMatch?.groupValues?.get(1)?.toIntOrNull() ?: bitRate
+            } catch (_: Exception) {}
+
+            val durationMs = durationUs / 1000.0
+            val pcmEncoding = when (targetBitsPerSample) { 24 -> "pcm_s24le"; 32 -> "pcm_s32le"; else -> "pcm_s16le" }
+            val cmd = "-y -i \"${tempInput.absolutePath}\" -vn -c:a $pcmEncoding -ar $sampleRate \"${outputPcmFile.absolutePath}\""
+            
+            val session = FFmpegKit.executeAsync(cmd,
+                { /* completion — handled below */ },
+                { /* log */ },
+                { stats ->
+                    if (durationMs > 0) {
+                        val pct = (stats.time / durationMs).toFloat().coerceIn(0f, 1f)
+                    }
+                }
+            )
+            
+            while (!session.state.name.equals("COMPLETED") && !session.state.name.equals("FAILED")) {
+                yield()
+                Thread.sleep(100)
+                if (durationMs > 0) {
+                    val statss = session.allStatistics
+                    if (statss.isNotEmpty()) {
+                        val pct = (statss.last().time / durationMs).toFloat().coerceIn(0f, 1f)
+                        withContext(Dispatchers.Main) {
+                            onProgress(pct)
+                        }
+                    }
+                }
+            }
+            
+            if (!ReturnCode.isSuccess(session.returnCode)) {
+                throw IOException("FFmpeg EAC3 decode failed: ${session.failStackTrace}")
+            }
+            withContext(Dispatchers.Main) {
+                onProgress(1f)
+            }
+            WavHelper.updateWavHeaderSizes(outputPcmFile, outputPcmFile.length() - 44)
+            
+            DecodedMetadata(
+                mimeType = "audio/eac3",
+                channelCount = channels,
+                sampleRate = sampleRate,
+                durationUs = durationUs,
+                profile = "E-AC3-JOC DD+ Software Decode (${channels}ch)",
+                bitDepth = targetBitsPerSample,
+                bitRate = bitRate,
+                isSimulated = false,
+                jocVersion = "EAC3 Core via FFmpeg Software"
+            )
+        } finally {
+            tempInput.delete()
         }
     }
 }

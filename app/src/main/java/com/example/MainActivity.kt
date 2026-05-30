@@ -168,6 +168,7 @@ fun DecoderAppScreen(
     val playbackElapsedMs by viewModel.playbackElapsedMs.collectAsState()
     val playbackTotalMs by viewModel.playbackTotalMs.collectAsState()
     val isAc4Ims by viewModel.isAc4Ims.collectAsState()
+    val activeDecoderType by viewModel.activeDecoderType.collectAsState()
 
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -422,7 +423,8 @@ fun DecoderAppScreen(
                                 fileName = state.originalName,
                                 progress = state.progress,
                                 statusMsg = state.status,
-                                estSecondsRemaining = state.estSecondsRemaining
+                                estSecondsRemaining = state.estSecondsRemaining,
+                                activeDecoderType = activeDecoderType
                             )
                         }
 
@@ -1587,7 +1589,8 @@ fun ProcessingCard(
     fileName: String,
     progress: Float,
     statusMsg: String,
-    estSecondsRemaining: Int
+    estSecondsRemaining: Int,
+    activeDecoderType: String = ""
 ) {
     val animatedProgress by animateFloatAsState(
         targetValue = progress,
@@ -1623,6 +1626,25 @@ fun ProcessingCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            if (activeDecoderType.isNotEmpty()) {
+                Surface(
+                    color = CyberCyan.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, CyberCyan.copy(alpha = 0.5f)),
+                    modifier = Modifier.padding(vertical = 4.dp).testTag("ActiveDecoderBadge")
+                ) {
+                    Text(
+                        text = "DECODER: $activeDecoderType",
+                        color = CyberCyan,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(4.dp))
 

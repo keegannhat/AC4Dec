@@ -18,8 +18,9 @@ dependencyResolutionManagement {
   repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
   repositories {
     google()
-    mavenCentral()
     maven { url = uri("https://jitpack.io") }
+    mavenCentral()
+    maven { url = uri("https://github.com/arthenica/ffmpeg-kit/releases/download/v6.0/") }
     maven { url = uri("https://raw.githubusercontent.com/arthenica/ffmpeg-kit-android-binary/main/releases/") }
   }
 }

@@ -19,6 +19,9 @@ import com.example.audio.DecoderSupportInfo
 import com.example.audio.DolbyAc4Decoder
 import com.example.audio.WavHelper
 import com.example.audio.FfmpegExportHelper
+import com.example.audio.TrueHdDecoder
+import com.example.audio.DtsDecoder
+import com.example.audio.SoftwareDecoderHelper
 import com.example.DecodingForegroundService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -454,16 +457,53 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
         prefs.edit().putString("recent_docs", serialized).apply()
     }
 
+    private val _activeDecoderType = MutableStateFlow("") // "Hardware", "Software (FFmpeg)", "TrueHD SW", "DTS SW"
+    val activeDecoderType: StateFlow<String> = _activeDecoderType.asStateFlow()
+
     fun selectFile(uri: Uri) {
         val context = getApplication<Application>()
         viewModelScope.launch {
             try {
-                val name = getFileNameFromUri(context, uri) ?: "refract_atmos_stream.ac4"
+                val name = getFileNameFromUri(context, uri) ?: "audio_stream"
                 onStopAudio()
-                
                 _uiState.value = UIState.Processing(name, 0f, "Reading file...")
-                delay(400) // Aesthetic delay for seamless UI transitions
-                val metadata = DolbyAc4Decoder.extractMetadata(context, uri)
+                delay(400)
+
+                // Detect format key to route to the right extractor
+                val formatKey = SoftwareDecoderHelper.detectFormatKey(name, null)
+
+                val metadata: DolbyAc4Decoder.DecodedMetadata = when (formatKey) {
+                    "truehd" -> {
+                        val m = TrueHdDecoder.extractMetadata(context, uri)
+                        // Convert to DolbyAc4Decoder.DecodedMetadata for unified state
+                        DolbyAc4Decoder.DecodedMetadata(
+                            mimeType = m.mimeType,
+                            channelCount = m.channelCount,
+                            sampleRate = m.sampleRate,
+                            durationUs = m.durationUs,
+                            profile = m.profile,
+                            bitDepth = m.bitDepth,
+                            bitRate = m.bitRate,
+                            presentationsCount = 1,
+                            jocVersion = m.jocVersion
+                        )
+                    }
+                    "dts" -> {
+                        val m = DtsDecoder.extractMetadata(context, uri)
+                        DolbyAc4Decoder.DecodedMetadata(
+                            mimeType = m.mimeType,
+                            channelCount = m.channelCount,
+                            sampleRate = m.sampleRate,
+                            durationUs = m.durationUs,
+                            profile = m.profile,
+                            bitDepth = m.bitDepth,
+                            bitRate = m.bitRate,
+                            presentationsCount = 1,
+                            jocVersion = m.jocVersion
+                        )
+                    }
+                    else -> DolbyAc4Decoder.extractMetadata(context, uri)
+                }
                 
                 // Set default speaker layouts depending on channel configurations parsed
                 if (metadata.channelCount == 2) {
@@ -568,49 +608,118 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                 val startTime = System.currentTimeMillis()
 
                 val activeMetadata = withContext(Dispatchers.IO) {
-                    DolbyAc4Decoder.decode(
-                        context = context,
-                        inputUri = state.uri,
-                        outputPcmFile = cachePcmFile,
-                        targetBitsPerSample = _defaultBitDepth.value,
-                        onProgress = { progress ->
-                            viewModelScope.launch(Dispatchers.Main) {
-                                val currentState = _uiState.value
-                                if (currentState is UIState.Processing) {
-                                    val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
-                                    val estRemaining = if (progress > 0.05f) {
-                                        ((elapsedSec / progress) - elapsedSec).toInt()
-                                    } else {
-                                        12
-                                    }
-                                    val progressPercent = (progress * 100).toInt()
-                                    _uiState.value = currentState.copy(
-                                        progress = progress,
-                                        status = "Decoding audio... (${String.format(Locale.getDefault(), "%.1f", progress * 100f)}%)",
-                                        estSecondsRemaining = estRemaining.coerceIn(1, 120)
-                                    )
-                                    
-                                    val notifProgress = (progress * 90).toInt()
-                                    com.example.DecodingForegroundService.updateProgress(
-                                        context,
-                                        notifProgress,
-                                        "$displayName · Decoding ($progressPercent%)"
-                                    )
+                    val formatKey = SoftwareDecoderHelper.detectFormatKey(state.name, state.metadata.mimeType)
+                    val hardwareLevel = deriveHardwareEnforcementLevel(_supportInfo.value)
+
+                    val progLambda: suspend (Float) -> Unit = { progress ->
+                        viewModelScope.launch(Dispatchers.Main) {
+                            val currentState = _uiState.value
+                            if (currentState is UIState.Processing) {
+                                val elapsedSec = (System.currentTimeMillis() - startTime) / 1000f
+                                val estRemaining = if (progress > 0.05f) {
+                                    ((elapsedSec / progress) - elapsedSec).toInt()
+                                } else {
+                                    12
                                 }
-                            }
-                        },
-                        onStatusUpdate = { status ->
-                            withContext(Dispatchers.Main) {
-                                if (status == "5.1 core extraction · Software fallback" || status == "DD+ 5.1 core · Software fallback") {
-                                    _showAtmosFallbackBanner.value = true
-                                }
-                                val currentState = _uiState.value
-                                if (currentState is UIState.Processing) {
-                                    _uiState.value = currentState.copy(status = status)
-                                }
+                                val progressPercent = (progress * 100).toInt()
+                                _uiState.value = currentState.copy(
+                                    progress = progress,
+                                    status = "Decoding audio... (${String.format(Locale.getDefault(), "%.1f", progress * 100f)}%)",
+                                    estSecondsRemaining = estRemaining.coerceIn(1, 120)
+                                )
+                                
+                                val notifProgress = (progress * 90).toInt()
+                                com.example.DecodingForegroundService.updateProgress(
+                                    context,
+                                    notifProgress,
+                                    "$displayName · Decoding ($progressPercent%)"
+                                )
                             }
                         }
-                    )
+                    }
+
+                    val statusLambda: suspend (String) -> Unit = { status ->
+                        withContext(Dispatchers.Main) {
+                            if (status == "5.1 core extraction · Software fallback" || status == "DD+ 5.1 core · Software fallback") {
+                                _showAtmosFallbackBanner.value = true
+                            }
+                            val currentState = _uiState.value
+                            if (currentState is UIState.Processing) {
+                                _uiState.value = currentState.copy(status = status)
+                            }
+                        }
+                    }
+
+                    when (formatKey) {
+                        "truehd" -> {
+                            _activeDecoderType.value = "TrueHD · FFmpeg Software (lossless)"
+                            TrueHdDecoder.decode(
+                                context = context,
+                                inputUri = state.uri,
+                                outputPcmFile = cachePcmFile,
+                                targetBitsPerSample = _defaultBitDepth.value,
+                                onProgress = progLambda,
+                                onStatusUpdate = statusLambda
+                            ).let { m ->
+                                DolbyAc4Decoder.DecodedMetadata(
+                                    mimeType = m.mimeType, channelCount = m.channelCount,
+                                    sampleRate = m.sampleRate, durationUs = m.durationUs,
+                                    profile = m.profile, bitDepth = m.bitDepth,
+                                    bitRate = m.bitRate, jocVersion = m.jocVersion
+                                )
+                            }
+                        }
+                        "dts" -> {
+                            _activeDecoderType.value = "DTS · FFmpeg Software (dca)"
+                            DtsDecoder.decode(
+                                context = context,
+                                inputUri = state.uri,
+                                outputPcmFile = cachePcmFile,
+                                targetBitsPerSample = _defaultBitDepth.value,
+                                onProgress = progLambda,
+                                onStatusUpdate = statusLambda
+                            ).let { m ->
+                                DolbyAc4Decoder.DecodedMetadata(
+                                    mimeType = m.mimeType, channelCount = m.channelCount,
+                                    sampleRate = m.sampleRate, durationUs = m.durationUs,
+                                    profile = m.profile, bitDepth = m.bitDepth,
+                                    bitRate = m.bitRate, jocVersion = m.jocVersion
+                                )
+                            }
+                        }
+                        "eac3" -> {
+                            val hasHardwareEac3 = _supportInfo.value?.availableCodecs?.any {
+                                it.mimeType.contains("eac3", ignoreCase = true) && !it.isEncoder &&
+                                !it.name.lowercase(Locale.getDefault()).contains("google")
+                            } ?: false
+                            
+                            if (hasHardwareEac3) {
+                                _activeDecoderType.value = "DD+JOC · Hardware MediaCodec"
+                                DolbyAc4Decoder.decode(
+                                    context, state.uri, cachePcmFile, _defaultBitDepth.value,
+                                    progLambda, statusLambda
+                                )
+                            } else {
+                                _activeDecoderType.value = "DD+JOC · FFmpeg Software Fallback"
+                                DolbyAc4Decoder.decodeEac3Software(
+                                    context, state.uri, cachePcmFile, _defaultBitDepth.value,
+                                    progLambda, statusLambda
+                                )
+                            }
+                        }
+                        else -> {
+                            // Default: AC-4 / existing hardware path
+                            _activeDecoderType.value = "AC-4 · Hardware MediaCodec"
+                            DolbyAc4Decoder.decode(
+                                context, state.uri, cachePcmFile, _defaultBitDepth.value,
+                                progLambda, statusLambda
+                            )
+                        }
+                    }
+                }
+                
+                if (activeMetadata.channelCount == 0) {
+                    throw IllegalStateException("Decoded audio has 0 channels — format may be unsupported")
                 }
 
                 val exportsDir = getExportsDir()
