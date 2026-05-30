@@ -494,7 +494,7 @@ fun DecoderAppScreen(
                 if (historyFiles.isNotEmpty()) {
                     item {
                         Text(
-                            text = "DECODED ARTIFACT HISTORY",
+                            text = "RECENT EXPORTS",
                             style = MaterialTheme.typography.labelMedium,
                             color = CyberCyan,
                             fontWeight = FontWeight.Bold,
@@ -2343,7 +2343,11 @@ fun SystemSettingsDialog(
                     Text("CLEAR HISTORY & RESET SETTINGS", fontSize = 11.sp, fontWeight = FontWeight.Black)
                 }
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("alpha-v0.4", color = CoolGrayText, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Text("alpha-v0.4", color = CoolGrayText, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("App made by Keegan Nhat", color = CoolGrayText.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                }
             }
         },
         containerColor = CardDark

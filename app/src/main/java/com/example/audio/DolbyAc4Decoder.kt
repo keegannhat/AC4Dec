@@ -227,6 +227,10 @@ object DolbyAc4Decoder {
                         }
                     } catch (e: Exception) {}
 
+                    if (type.contains("eac3", ignoreCase = true) && maxChannels in 1..15) {
+                        maxChannels = 16
+                    }
+
                     allAudioCodecs.add(
                         CodecDetail(
                             name = info.name,
@@ -402,12 +406,7 @@ object DolbyAc4Decoder {
 
             // Force multichannel output if possible
             val outCh = targetChannelCount ?: 32
-            // Some hardware EAC3 decoders segfault if forced above 8 explicitly. Clamping for EAC3:
-            if (isEac3 && outCh > 8) {
-                format.setInteger("max-output-channel-count", 8)
-            } else {
-                format.setInteger("max-output-channel-count", outCh)
-            }
+            format.setInteger("max-output-channel-count", outCh)
             
             codec.configure(format, null, null, 0)
             codec.start()
