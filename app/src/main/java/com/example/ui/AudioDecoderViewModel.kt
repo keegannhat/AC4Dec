@@ -753,9 +753,21 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                         _uiState.value = processingState.copy(
                           progress = 0.97f, status = "Splitting channels...")
                       }
+                      // Upmix to targetChannelCount if the decoder produced fewer channels
+                      // (e.g. hardware EAC3 caps at 12ch when 16ch / 9.1.6 was requested).
+                      val splitSource = if (activeMetadata.channelCount < targetChannelCount) {
+                          val upmixed = File(context.cacheDir, "temp_upmix.wav")
+                          FfmpegExportHelper.upmixChannels(
+                              cachePcmFile, upmixed,
+                              targetChannelCount, _defaultSampleRate.value, _defaultBitDepth.value
+                          )
+                          upmixed
+                      } else {
+                          cachePcmFile
+                      }
                       val splits = FfmpegExportHelper.splitChannels(
-                        cachePcmFile, exportsDir, clearName,
-                        activeMetadata.channelCount,
+                        splitSource, exportsDir, clearName,
+                        targetChannelCount,
                         _defaultSampleRate.value, _defaultBitDepth.value,
                         asFlac = false
                       ) { done, total ->
@@ -772,9 +784,21 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                           progress = 0.97f, status = "Encoding FLAC channels...")
                       }
                       val tempDir = File(context.cacheDir, "flac_tmp").apply { mkdirs() }
+                      // Upmix to targetChannelCount if the decoder produced fewer channels
+                      // (e.g. hardware EAC3 caps at 12ch when 16ch / 9.1.6 was requested).
+                      val splitSource = if (activeMetadata.channelCount < targetChannelCount) {
+                          val upmixed = File(context.cacheDir, "temp_upmix.wav")
+                          FfmpegExportHelper.upmixChannels(
+                              cachePcmFile, upmixed,
+                              targetChannelCount, _defaultSampleRate.value, _defaultBitDepth.value
+                          )
+                          upmixed
+                      } else {
+                          cachePcmFile
+                      }
                       val flacs = FfmpegExportHelper.splitChannels(
-                        cachePcmFile, tempDir, clearName,
-                        activeMetadata.channelCount,
+                        splitSource, tempDir, clearName,
+                        targetChannelCount,
                         _defaultSampleRate.value, _defaultBitDepth.value,
                         asFlac = true
                       ) { done, total ->
@@ -787,7 +811,7 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                           progress = 0.995f, status = "Compressing to ZIP...")
                       }
                       val zip = File(exportsDir,
-                        "${clearName}_SplitFLAC_${activeMetadata.channelCount}ch.zip")
+                        "${clearName}_SplitFLAC_${targetChannelCount}ch.zip")
                       FfmpegExportHelper.zipFiles(flacs, zip)
                       finalFiles.add(zip)
                     }
