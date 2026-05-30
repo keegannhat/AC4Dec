@@ -224,15 +224,58 @@ fun DecoderAppScreen(
 
     Box(
         modifier = modifier
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        SlateGrayBg,
-                        Color(0xFF060912)
-                    )
-                )
-            )
+            .background(Color(0xFF000000))
     ) {
+        // Abstract Liquid Glass Background Nodes
+        val infiniteTransition = rememberInfiniteTransition()
+        val phase by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 2f * Math.PI.toFloat(),
+            animationSpec = infiniteRepeatable(tween(22000, easing = LinearEasing), RepeatMode.Restart)
+        )
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val center1 = Offset(
+                x = size.width * 0.2f + (cos(phase) * size.width * 0.15f),
+                y = size.height * 0.2f + (sin(phase) * size.height * 0.1f)
+            )
+            val center2 = Offset(
+                x = size.width * 0.8f + (cos(phase + 2f) * size.width * 0.2f),
+                y = size.height * 0.4f + (sin(phase + 1f) * size.height * 0.15f)
+            )
+            val center3 = Offset(
+                x = size.width * 0.5f + (cos(phase + 4f) * size.width * 0.15f),
+                y = size.height * 0.8f + (sin(phase + 3f) * size.height * 0.15f)
+            )
+
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFF006D69).copy(alpha = 0.3f), Color.Transparent),
+                    center = center1,
+                    radius = size.width * 0.6f
+                ),
+                radius = size.width * 0.6f,
+                center = center1
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFF8B1A00).copy(alpha = 0.25f), Color.Transparent),
+                    center = center2,
+                    radius = size.width * 0.8f
+                ),
+                radius = size.width * 0.8f,
+                center = center2
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFF0B1736).copy(alpha = 0.5f), Color.Transparent),
+                    center = center3,
+                    radius = size.width * 0.7f
+                ),
+                radius = size.width * 0.7f,
+                center = center3
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -2572,12 +2615,18 @@ fun HistoryFileItem(
     val isReport = file.extension == "txt"
     val isZip = file.extension == "zip"
     
-    Card(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .border(BorderStroke(1.dp, SurfaceBorder), RoundedCornerShape(12.dp))
-            .testTag("history_item"),
-        colors = CardDefaults.cardColors(containerColor = CardDark)
+            .clip(RoundedCornerShape(24.dp))
+            .background(
+                Brush.horizontalGradient(
+                    colors = if (isReport) listOf(Color(0xFF8B1A00).copy(alpha = 0.5f), Color(0xFFC93000).copy(alpha = 0.5f)) 
+                             else (if (isZip) listOf(Color(0xFF006D69).copy(alpha = 0.5f), Color(0xFF00A380).copy(alpha = 0.5f))
+                             else listOf(Color(0xFF0D6B78).copy(alpha = 0.5f), Color(0xFF003844).copy(alpha = 0.5f)))
+                )
+            )
+            .border(1.dp, SurfaceBorder, RoundedCornerShape(24.dp))
     ) {
         Row(
             modifier = Modifier
@@ -2592,69 +2641,68 @@ fun HistoryFileItem(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
-                        .background(
-                            if (isReport) PurpleGlow.copy(alpha = 0.2f) 
-                            else (if (isZip) AcidGreen.copy(alpha = 0.2f) else CyberCyan.copy(alpha = 0.2f))
-                        ),
+                        .background(Color.White),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = if (isReport) Icons.Default.Info else (if (isZip) Icons.Default.CheckCircle else Icons.Default.PlayArrow),
                         contentDescription = "music logo",
-                        tint = if (isReport) PurpleGlow else (if (isZip) AcidGreen else CyberCyan),
-                        modifier = Modifier.size(16.dp)
+                        tint = if (isReport) Color(0xFFFF3B30) else (if (isZip) Color(0xFF34C759) else Color(0xFF0D6B78)),
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(16.dp))
 
                 Column {
                     Text(
                         text = file.name,
-                        color = IceWhite,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 18.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = if (isReport) "Loudness specifications text report" else "${String.format(Locale.getDefault(), "%.1f", file.length() / (1024f * 1024f))} MB • ${file.extension.uppercase()}",
-                        color = CoolGrayText,
-                        fontSize = 10.sp
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontWeight = FontWeight.Light,
+                        fontSize = 13.sp
                     )
                 }
             }
 
             // Quick Actions
-            Row {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!isReport && !isZip) {
-                    IconButton(onClick = onPlayPause, modifier = Modifier.size(32.dp)) {
+                    IconButton(onClick = onPlayPause, modifier = Modifier.size(36.dp).background(Color.White.copy(alpha=0.15f), CircleShape)) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Default.Close else Icons.Default.PlayArrow,
                             contentDescription = "play/pause",
-                            tint = CyberCyan,
+                            tint = Color.White,
                             modifier = Modifier.size(18.dp)
                         )
                     }
                 }
-
-                IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
+                
+                IconButton(onClick = onShare, modifier = Modifier.size(36.dp).background(Color.White.copy(alpha=0.15f), CircleShape)) {
                     Icon(
                         imageVector = Icons.Default.Share,
                         contentDescription = "share",
-                        tint = IceWhite,
-                        modifier = Modifier.size(16.dp)
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
-
-                IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                
+                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp).background(Color.White.copy(alpha=0.1f), CircleShape)) {
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "delete",
-                        tint = RedAlert,
-                        modifier = Modifier.size(16.dp)
+                        tint = Color.White.copy(alpha=0.7f),
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
