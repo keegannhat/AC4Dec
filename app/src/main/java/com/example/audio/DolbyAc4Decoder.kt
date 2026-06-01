@@ -673,13 +673,7 @@ object DolbyAc4Decoder {
             if (trackIndex == -1 || format == null || mime == null) {
                 android.util.Log.w("DolbyAc4Decoder", "[Decoder] MediaExtractor found no standard tracks. Probing with FFprobe...")
                 val probeRes = probeFileWithFFprobeSync(context, inputUri, ext)
-                if (probeRes.hasAc4) {
-                    android.util.Log.i("DolbyAc4Decoder", "[Decoder Fallback] FFprobe confirmed AC-4 stream exists! Entering AC-4 Software Fallback...")
-                    return@withContext runAc4SoftwareFallbackDecoder(
-                        context, inputUri, outputPcmFile, targetBitsPerSample, targetChannelCount ?: probeRes.channels,
-                        probeRes.durationUs, onProgress, onStatusUpdate
-                    )
-                } else if (probeRes.hasEac3) {
+                if (probeRes.hasEac3) {
                     android.util.Log.i("DolbyAc4Decoder", "[Decoder Fallback] FFprobe confirmed EAC3 stream. Redirecting to Software EAC3...")
                     return@withContext decodeEac3Software(
                         context, inputUri, outputPcmFile, targetBitsPerSample, targetChannelCount, onProgress, onStatusUpdate
@@ -687,8 +681,7 @@ object DolbyAc4Decoder {
                 } else {
                     throw IOException(
                         "No Dolby AC-4 or E-AC3 track found. " +
-                        "Tracks found: ${(0 until extractor.trackCount)
-                            .map { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME) }.joinToString()}"
+                        "MediaExtractor found: ${(0 until extractor.trackCount).map { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME) }.joinToString()}. FFprobe Ac4=${probeRes.hasAc4}"
                     )
                 }
             }
@@ -717,13 +710,14 @@ object DolbyAc4Decoder {
                 codec = MediaCodec.createDecoderByType(mime) // Try standard type allocation
             }
 
-            // Force multichannel output if possible - limit maximum channel count to 16 based on codec capabilities
-            val outCh = (targetChannelCount ?: 16).coerceAtMost(16)
-            format.setInteger("max-output-channel-count", outCh)
+            // DO NOT set max-output-channel-count for AC-4, as it can cause Samsung's hardware decoder
+            // to fail or reject multichannel L4 presentations. Let the decoder use its native channel layout.
+            // val outCh = (targetChannelCount ?: 16).coerceAtMost(16)
+            // format.setInteger("max-output-channel-count", outCh)
             
             android.util.Log.i("DolbyAc4Decoder", "[MediaCodec Configure] Initializing MediaCodec for mime type: $mime")
             android.util.Log.i("DolbyAc4Decoder", "  - Input Format Keys: $format")
-            android.util.Log.i("DolbyAc4Decoder", "  - Configured 'max-output-channel-count': $outCh")
+            android.util.Log.i("DolbyAc4Decoder", "  - Channel output coerced limits removed for L4 debugging")
             
             try {
                 codec.configure(format, null, null, 0)
@@ -900,25 +894,19 @@ object DolbyAc4Decoder {
             onStatusUpdate("Writing file...")
             WavHelper.updateWavHeaderSizes(outputPcmFile, totalDataBytes)
 
-            // Dynamic check: determine if the output decoding size is sufficient
-            // expected size: duration * sample_rate * channels * bytes_per_sample
-            val extDurSec = if (durationUs > 0) durationUs / 1_000_000.0 else 10.0
-            val expectedMinBytes = (extDurSec * actualSampleRate * actualChannelCount * (actualBitsPerSample / 8.0) * 0.35).toLong()
+            // Removed fallback to let the raw output be analyzed
+            // val extDurSec = if (durationUs > 0) durationUs / 1_000_000.0 else 10.0
+            // val expectedMinBytes = (extDurSec * actualSampleRate * actualChannelCount * (actualBitsPerSample / 8.0) * 0.35).toLong()
 
             android.util.Log.i("DolbyAc4Decoder", "[MediaCodec Summary] Decoded frames complete.")
             android.util.Log.i("DolbyAc4Decoder", "  - Total input packets queued: $inputQueuedCount")
             android.util.Log.i("DolbyAc4Decoder", "  - Total output buffers dequeued: $outputOffsetCount")
             android.util.Log.i("DolbyAc4Decoder", "  - Non-zero size output buffers: $nonZeroOutputCount")
-            android.util.Log.i("DolbyAc4Decoder", "  - Total PCM bytes written: $totalDataBytes, Expected minimum bytes to be non-failure: $expectedMinBytes")
+            android.util.Log.i("DolbyAc4Decoder", "  - Total PCM bytes written: $totalDataBytes")
 
-            if (totalDataBytes < expectedMinBytes || nonZeroOutputCount < 5) {
-                android.util.Log.w("DolbyAc4Decoder", "[Fallback Trigger] Hardware decoder failed to decode complete PCM bitstream. (Bytes output: $totalDataBytes < $expectedMinBytes expected). Samsung's Dolby pipeline could be rejecting multi-channel L4 or encountering a container parse-barrier. Activating the highly resilient Software Dolby Spatial Audio Simulator...")
-                val probeRes = probeFileWithFFprobeSync(context, inputUri, ext)
-                return@withContext runAc4SoftwareFallbackDecoder(
-                    context, inputUri, outputPcmFile, targetBitsPerSample, targetChannelCount ?: probeRes.channels,
-                    probeRes.durationUs, onProgress, onStatusUpdate
-                )
-            }
+            // if (totalDataBytes < expectedMinBytes || nonZeroOutputCount < 5) {
+            //    ... (fallback logic removed)
+            // }
 
             val profile = if (actualChannelCount == 2) {
                 "IMS (Immersive Stereo / Binaural)"
@@ -937,24 +925,14 @@ object DolbyAc4Decoder {
             )
 
         } catch (e: Exception) {
-            android.util.Log.e("DolbyAc4Decoder", "Hardware decoding failed or unsupported container/track: ${e.message}. Attempting software fallback...", e)
+            android.util.Log.e("DolbyAc4Decoder", "Hardware decoding failed or unsupported container/track: ${e.message}", e)
             val probeRes = probeFileWithFFprobeSync(context, inputUri, ext)
-            if (probeRes.hasAc4) {
-                return@withContext runAc4SoftwareFallbackDecoder(
-                    context, inputUri, outputPcmFile, targetBitsPerSample, targetChannelCount ?: probeRes.channels,
-                    probeRes.durationUs, onProgress, onStatusUpdate
-                )
-            } else if (probeRes.hasEac3) {
+            if (probeRes.hasEac3) {
                 return@withContext decodeEac3Software(
                     context, inputUri, outputPcmFile, targetBitsPerSample, targetChannelCount, onProgress, onStatusUpdate
                 )
             } else {
-                // If completely unrecognizable, synthesize generic dynamic spatial audio
-                android.util.Log.w("DolbyAc4Decoder", "Completely unidentifiable stream logic. Synthesizing generic multi-channel spatial audio renderer to prevent raw failures.")
-                return@withContext runAc4SoftwareFallbackDecoder(
-                    context, inputUri, outputPcmFile, targetBitsPerSample, targetChannelCount ?: 6,
-                    12_000_000L, onProgress, onStatusUpdate
-                )
+                throw IOException("Hardware decoder failed: ${e.message}", e)
             }
         } finally {
             try { extractor.release() } catch (e: Exception) {}
