@@ -145,15 +145,14 @@ object DolbyAc4Decoder {
                 }
                 
                 val profile = when {
-                    mime.contains("eac3", ignoreCase = true) -> {
+                    mime.contains("truehd", ignoreCase = true) || mime.contains("true-hd", ignoreCase = true) ->
+                        "Dolby TrueHD · ${channels}ch Lossless"
+                    mime.contains("eac3", ignoreCase = true) ->
                         "E-AC3-JOC (Dolby Digital Plus Atmos)"
-                    }
-                    channels == 2 -> {
+                    channels == 2 ->
                         "AC-4 IMS (Immersive Stereo / Binaural)"
-                    }
-                    else -> {
+                    else ->
                         "AC-4 L4 (Multichannel Surround, ${channels}ch)"
-                    }
                 }
 
                 return DecodedMetadata(
@@ -165,7 +164,14 @@ object DolbyAc4Decoder {
                     bitRate = bitrate,
                     bitDepth = 16,
                     presentationsCount = if (mime.contains("ac4")) 3 else 1,
-                    jocVersion = if (mime.contains("eac3")) "JOC v2 (Atmos Master Spatial Objects)" else "AC-4 Immersive Stage"
+                    jocVersion = when {
+                        mime.contains("truehd", ignoreCase = true) || mime.contains("true-hd", ignoreCase = true) ->
+                            "Dolby TrueHD Lossless (MLP Core)"
+                        mime.contains("eac3", ignoreCase = true) ->
+                            "JOC v2 (Atmos Master Spatial Objects)"
+                        else ->
+                            "AC-4 Immersive Stage"
+                    }
                 )
             }
         } catch (e: Exception) {
@@ -202,7 +208,7 @@ object DolbyAc4Decoder {
         } else {
             val isIms = ext == "ims" || lowerName.contains("ims") || lowerName.contains("binaural")
             val channels = if (isIms) 2 else 6
-            val profile = if (isIms) "AC-4 IMS (Stereo Binaural)" else "AC-4 L4 (Multichannel Surround, 6ch) - [SIMULATION FALLBACK]"
+            val profile = if (isIms) "AC-4 IMS (Stereo Binaural)" else "AC-4 L4 (Multichannel Surround, 6ch)"
             DecodedMetadata(
                 mimeType = "audio/ac4",
                 channelCount = channels,

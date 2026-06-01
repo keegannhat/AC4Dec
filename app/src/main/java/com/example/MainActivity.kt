@@ -429,7 +429,7 @@ fun DecoderAppScreen(
                                 speakerConfig = speakerConfig,
                                 onSpeakerConfigChange = { viewModel.setSpeakerConfig(it) },
                                 isIms = isAc4Ims,
-                                isTrueHd = state.metadata.mimeType.contains("truehd", true)
+                                isTrueHd = state.metadata.mimeType.contains("truehd", true) || state.metadata.mimeType.contains("true-hd", true)
                             )
                         }
 
@@ -989,7 +989,7 @@ fun FileDropzoneSelector(
                 Spacer(modifier = Modifier.height(4.dp))
                 
                 Text(
-                    text = "Supports .ac4, .ec3, .mp4, .m4a, and .ts containers",
+                    text = "Supports .ac4 · .ec3 · .thd · .mlp · .mkv · .mp4 · .m4a",
                     color = CoolGrayText,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Normal,
@@ -1168,7 +1168,12 @@ fun FileSelectedCard(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("Profile Standard:", color = CoolGrayText, fontSize = 11.sp)
-                        Text(info.profile, color = PurpleGlow, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        val profileColor = when {
+                            info.mimeType.contains("truehd", ignoreCase = true) || info.mimeType.contains("true-hd", ignoreCase = true) -> CyberCyan
+                            info.mimeType.contains("dts", ignoreCase = true) -> Color(0xFFFFB300)
+                            else -> PurpleGlow
+                        }
+                        Text(info.profile, color = profileColor, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
 
                     Row(
@@ -1183,8 +1188,8 @@ fun FileSelectedCard(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Decoded Bit Depth:", color = CoolGrayText, fontSize = 11.sp)
-                        Text("${info.bitDepth}-bit uncompressed PCM", color = IceWhite, fontSize = 11.sp)
+                        Text("Export Bit Depth:", color = CoolGrayText, fontSize = 11.sp)
+                        Text("${info.bitDepth}-bit PCM (export setting)", color = IceWhite, fontSize = 11.sp)
                     }
 
                     Row(
@@ -1192,15 +1197,31 @@ fun FileSelectedCard(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("Bitstream Channel layout:", color = CoolGrayText, fontSize = 11.sp)
-                        Text("${info.channelCount} Channels (Atmos Matrix)", color = IceWhite, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        val channelLabel = when (info.channelCount) {
+                            1  -> "1ch · Mono"
+                            2  -> "2ch · Stereo"
+                            6  -> "6ch · 5.1 Surround"
+                            8  -> "8ch · 7.1 Surround"
+                            12 -> "12ch · 7.1.4 Immersive"
+                            16 -> "16ch · 9.1.6 Immersive"
+                            else -> "${info.channelCount}ch"
+                        }
+                        Text(channelLabel, color = IceWhite, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Atmos Master Standard:", color = CoolGrayText, fontSize = 11.sp)
-                        Text(info.jocVersion, color = CyberCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        val techLabel = when {
+                            info.mimeType.contains("truehd", ignoreCase = true) || info.mimeType.contains("true-hd", ignoreCase = true) -> "Lossless Format:"
+                            info.mimeType.contains("eac3", ignoreCase = true) -> "Object Coding:"
+                            info.mimeType.contains("dts", ignoreCase = true) -> "DTS Profile:"
+                            else -> "Stream Standard:"
+                        }
+                        val techValue = if (info.jocVersion.isNotBlank()) info.jocVersion else info.mimeType
+                        Text(techLabel, color = CoolGrayText, fontSize = 11.sp)
+                        Text(techValue, color = CyberCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
 
                     Row(
@@ -1215,13 +1236,13 @@ fun FileSelectedCard(
             }
 
             // Dolby Presentation Selector Block (Only shown for AC-4 stream files loaded)
-            if (info.mimeType.contains("ac4", ignoreCase = true) && availablePresentations.size > 1) {
+            if (info.mimeType.equals("audio/ac4", ignoreCase = true) && availablePresentations.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
                 HorizontalDivider(color = SurfaceBorder)
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 Text(
-                    text = "DOLBY AC-4 PROGRAM LIST (${availablePresentations.size})",
+                    text = "AC-4 PRESENTATION STREAMS (${availablePresentations.size})",
                     fontWeight = FontWeight.Bold,
                     color = CyberCyan,
                     fontSize = 11.sp,

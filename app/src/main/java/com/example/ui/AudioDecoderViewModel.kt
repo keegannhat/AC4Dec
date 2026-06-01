@@ -451,7 +451,17 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
             RecentFileRecord(
                 name = name,
                 uriString = uri.toString(),
-                format = meta.profile,
+                format = when {
+                    meta.mimeType.contains("true-hd", ignoreCase = true) || meta.mimeType.contains("truehd", ignoreCase = true) ->
+                        "Dolby TrueHD${if (meta.profile.contains("Atmos")) " Atmos" else ""}"
+                    meta.mimeType.contains("eac3", ignoreCase = true) ->
+                        "E-AC3-JOC (Dolby Digital Plus Atmos)"
+                    meta.mimeType.contains("ac4", ignoreCase = true) ->
+                        if (meta.channelCount <= 2) "AC-4 IMS Binaural" else "AC-4 L4 Multichannel"
+                    meta.mimeType.contains("dts", ignoreCase = true) ->
+                        "DTS-HD / DTS:X"
+                    else -> meta.mimeType
+                },
                 durationMs = meta.durationUs / 1000,
                 channels = meta.channelCount,
                 dateAdded = dateString
@@ -482,7 +492,38 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                 // Detect format key to route to the right extractor
                 val formatKey = SoftwareDecoderHelper.detectFormatKeyRobust(context, uri, name, null)
 
-                val metadata: DolbyAc4Decoder.DecodedMetadata = DolbyAc4Decoder.extractMetadata(context, uri)
+                val metadata: DolbyAc4Decoder.DecodedMetadata = if (formatKey == "truehd") {
+                    // MediaExtractor cannot reliably read TrueHD tracks from MKV containers.
+                    // Use FFprobe for accurate metadata instead.
+                    withContext(Dispatchers.IO) {
+                        val tempFile = SoftwareDecoderHelper.copyUriToTemp(context, uri, "truehd_meta.tmp")
+                        try {
+                            val probeOut = com.arthenica.ffmpegkit.FFprobeKit.execute(
+                                "-v quiet -print_format json -show_streams \"${tempFile.absolutePath}\""
+                            ).output ?: ""
+                            val channels  = Regex("\"channels\"\\s*:\\s*(\\d+)").find(probeOut)?.groupValues?.get(1)?.toIntOrNull() ?: 8
+                            val sampleRate = Regex("\"sample_rate\"\\s*:\\s*\"(\\d+)\"").find(probeOut)?.groupValues?.get(1)?.toIntOrNull() ?: 48000
+                            val durationUs = ((Regex("\"duration\"\\s*:\\s*\"([0-9.]+)\"").find(probeOut)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0) * 1_000_000).toLong()
+                            val bitRate    = Regex("\"bit_rate\"\\s*:\\s*\"(\\d+)\"").find(probeOut)?.groupValues?.get(1)?.toIntOrNull() ?: 3000000
+                            val hasAtmos   = probeOut.contains("atmos", ignoreCase = true) || name.contains("atmos", ignoreCase = true)
+                            DolbyAc4Decoder.DecodedMetadata(
+                                mimeType  = "audio/true-hd",
+                                channelCount = channels,
+                                sampleRate   = sampleRate,
+                                durationUs   = durationUs,
+                                profile      = "Dolby TrueHD${if (hasAtmos) " Atmos" else ""} · ${channels}ch Lossless",
+                                bitRate      = bitRate,
+                                bitDepth     = 24,
+                                presentationsCount = 1,
+                                jocVersion   = "Dolby TrueHD${if (hasAtmos) " with Atmos Objects" else " Lossless (MLP Core)"}"
+                            )
+                        } finally {
+                            tempFile.delete()
+                        }
+                    }
+                } else {
+                    DolbyAc4Decoder.extractMetadata(context, uri)
+                }
                 
                 // Set default speaker layouts depending on channel configurations parsed
                 if (metadata.channelCount == 2) {
@@ -494,16 +535,12 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                 }
 
                 // Generates Available Dolby presentations
-                if (metadata.mimeType.contains("ac4", ignoreCase = true)) {
+                if (metadata.mimeType.equals("audio/ac4", ignoreCase = true)) {
                     _availablePresentations.value = listOf(
-                        DolbyAc4Decoder.PresentationInfo("pr_1", "Main Immersive Mix (English)", "eng", true, "5.1.4 Object Bed", -16.0),
-                        DolbyAc4Decoder.PresentationInfo("pr_2", "Dialogue Boost", "eng", false, "Stereo (Clear Voice Boost)", -12.4),
-                        DolbyAc4Decoder.PresentationInfo("pr_3", "Hearing Aid", "spa", false, "Stereo Downmix", -14.0)
+                        DolbyAc4Decoder.PresentationInfo("pr_1", "Main Mix", "und", true, "${metadata.channelCount}ch Bed", -18.0)
                     )
                 } else {
-                    _availablePresentations.value = listOf(
-                        DolbyAc4Decoder.PresentationInfo("pr_1", "Base Atmos Bed Mix (L/R/C/LFE/Surround)", "und", true, "Multichannel Surround Only", -18.0)
-                    )
+                    _availablePresentations.value = emptyList()
                 }
                 _selectedPresentationIndex.value = 0
 
@@ -531,8 +568,8 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
             delay(1000)
             
             val updatedMetadata = state.metadata.copy(
-                profile = "AC-4 Presentation Selected: ${availablePresentations.value[index].label}",
-                channelCount = if (index > 0) 2 else state.metadata.channelCount
+                profile = "AC-4 · ${availablePresentations.value[index].label}"
+                // channelCount intentionally not overridden — it reflects the actual bitstream
             )
             _uiState.value = UIState.FileSelected(state.uri, state.name, updatedMetadata)
         }
