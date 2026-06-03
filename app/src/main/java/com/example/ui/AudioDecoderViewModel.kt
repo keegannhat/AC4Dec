@@ -144,7 +144,7 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
             initialValue = HardwareEnforcementLevel.NONE
         )
 
-    private val _exportMode = MutableStateFlow(ExportMode.StereoBinauralWav)
+    private val _exportMode = MutableStateFlow(ExportMode.WaveMultichannel)
     val exportMode: StateFlow<ExportMode> = _exportMode.asStateFlow()
 
     private val _exportFlacStereo = MutableStateFlow(false)
@@ -317,11 +317,11 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
         } else {
             _exportLocationLabel.value = "Downloads/Refract"
         }
-        val expModeName = prefs.getString("export_mode", ExportMode.StereoBinauralWav.name)
+        val expModeName = prefs.getString("export_mode", ExportMode.WaveMultichannel.name)
         _exportMode.value = try {
-            ExportMode.valueOf(expModeName ?: ExportMode.StereoBinauralWav.name)
+            ExportMode.valueOf(expModeName ?: ExportMode.WaveMultichannel.name)
         } catch (e: Exception) {
-            ExportMode.StereoBinauralWav
+            ExportMode.WaveMultichannel
         }
     }
 

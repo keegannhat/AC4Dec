@@ -1314,7 +1314,7 @@ fun FileSelectedCard(
                 val layoutOptions = listOf(
                     "Mono"  to false,
                     "Stereo" to false,
-                    "5.1"   to isIms,   // disabled when IMS
+                    "5.1"   to false, // IMS can decode up to 5.1
                     "7.1"   to isIms,
                     "7.1.4" to isIms
                 )
@@ -1509,21 +1509,14 @@ fun FileSelectedCard(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ExportModeOptionTile(
-                    title = "Stereo Downmix",
-                    desc = "Downmixes discrete sound coordinates into spatialized binaural stereo WAV (Recommended for regular headphones).",
-                    selected = selectedMode == AudioDecoderViewModel.ExportMode.StereoBinauralWav,
-                    onClick = { onModeSelect(AudioDecoderViewModel.ExportMode.StereoBinauralWav) }
-                )
-
-                ExportModeOptionTile(
                     title = "Multichannel WAV",
                     desc = "Generates a single multichannel uncompressed WAV preserving layout mapping coordinates (Ideal for DAW editing).",
                     selected = selectedMode == AudioDecoderViewModel.ExportMode.WaveMultichannel,
                     onClick = { onModeSelect(AudioDecoderViewModel.ExportMode.WaveMultichannel) }
                 )
 
-                val allowSplit = info.channelCount > 2
-                val tooltipMsg = if (allowSplit) null else "AC-4 IMS is 2.0 — split export not applicable."
+                val allowSplit = speakerConfig != "Mono" && speakerConfig != "Stereo"
+                val tooltipMsg = if (allowSplit) null else "Select a multichannel layout (5.1 or higher) to enable split export."
 
                 ExportModeOptionTile(
                     title = "Split WAV (stereo pairs)",
@@ -2389,7 +2382,7 @@ fun SystemSettingsDialog(
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                    Text("alpha-v0.4", color = CoolGrayText, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                    Text("alpha-v0.5", color = CoolGrayText, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text("App made by Keegan Nhat", color = CoolGrayText.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                 }
