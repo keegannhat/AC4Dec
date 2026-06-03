@@ -313,8 +313,10 @@ object DolbyAc4Decoder {
                         "Dolby TrueHD · ${channels}ch Lossless"
                     mime.contains("eac3", ignoreCase = true) ->
                         "E-AC3-JOC (Dolby Digital Plus Atmos)"
-                    channels == 2 ->
-                        "AC-4 IMS (Immersive Stereo / Binaural)"
+                    mime.contains("ac4", ignoreCase = true) && channels <= 2 ->
+                        "AC-4 IMS (Immersive Stereo · Binaural render)"
+                    mime.contains("ac4", ignoreCase = true) ->
+                        "AC-4 IMS/L4 (${channels}ch Surround)"
                     else ->
                         "AC-4 L4 (Multichannel Surround, ${channels}ch)"
                 }
@@ -370,9 +372,15 @@ object DolbyAc4Decoder {
                 jocVersion = "JOC v2 (Atmos Master Spatial Objects)"
             )
         } else {
-            val isIms = ext == "ims" || lowerName.contains("ims") || lowerName.contains("binaural")
-            val channels = if (isIms) 2 else 6
-            val profile = if (isIms) "AC-4 IMS (Stereo Binaural)" else "AC-4 L4 (Multichannel Surround, 6ch)"
+            // AC-4 IMS can carry up to 5.1 (6ch), not just stereo.
+            // Only fall back to 2ch if the filename strongly implies binaural-only (headphone render).
+            val isBinauralOnly = lowerName.contains("binaural") && !lowerName.contains("ims")
+            val channels = if (isBinauralOnly) 2 else 6
+            val profile = when {
+                isBinauralOnly -> "AC-4 IMS (Binaural Stereo)"
+                ext == "ims" || lowerName.contains("ims") -> "AC-4 IMS (Immersive Stereo, up to 5.1)"
+                else -> "AC-4 L4 (Multichannel Surround, 6ch)"
+            }
             DecodedMetadata(
                 mimeType = "audio/ac4",
                 channelCount = channels,
@@ -710,14 +718,13 @@ object DolbyAc4Decoder {
                 codec = MediaCodec.createDecoderByType(mime) // Try standard type allocation
             }
 
-            // DO NOT set max-output-channel-count for AC-4, as it can cause Samsung's hardware decoder
-            // to fail or reject multichannel L4 presentations. Let the decoder use its native channel layout.
-            // val outCh = (targetChannelCount ?: 16).coerceAtMost(16)
-            // format.setInteger("max-output-channel-count", outCh)
+            // Force multichannel output if possible - limit maximum channel count to 16 based on codec capabilities
+            val outCh = (targetChannelCount ?: 16).coerceAtMost(16)
+            format.setInteger("max-output-channel-count", outCh)
             
             android.util.Log.i("DolbyAc4Decoder", "[MediaCodec Configure] Initializing MediaCodec for mime type: $mime")
             android.util.Log.i("DolbyAc4Decoder", "  - Input Format Keys: $format")
-            android.util.Log.i("DolbyAc4Decoder", "  - Channel output coerced limits removed for L4 debugging")
+            android.util.Log.i("DolbyAc4Decoder", "  - Configured 'max-output-channel-count': $outCh")
             
             try {
                 codec.configure(format, null, null, 0)

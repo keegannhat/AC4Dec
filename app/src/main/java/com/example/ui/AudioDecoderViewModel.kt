@@ -89,13 +89,14 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
     private val _uiState = MutableStateFlow<UIState>(UIState.Idle)
     val uiState: StateFlow<UIState> = _uiState.asStateFlow()
 
+    // isAc4Ims indicates an AC-4 IMS file — but IMS does NOT mean stereo-only.
+    // AC-4 IMS can decode to up to 5.1 on supported hardware. We flag IMS files
+    // only to show appropriate UI labels, NOT to lock channel count to 2.
     val isAc4Ims: StateFlow<Boolean> = uiState
         .map { state ->
             when (state) {
-                is UIState.FileSelected -> 
-                    state.metadata.mimeType.contains("ac4", 
-                        ignoreCase = true) && 
-                    state.metadata.channelCount <= 2
+                is UIState.FileSelected ->
+                    state.metadata.mimeType.contains("ac4", ignoreCase = true)
                 else -> false
             }
         }
@@ -273,8 +274,14 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
 
         viewModelScope.launch {
             isAc4Ims.collect { isIms ->
-                if (isIms && _speakerConfig.value !in listOf("Mono", "Stereo")) {
-                    _speakerConfig.value = "Stereo"
+                if (isIms) {
+                    // AC-4 IMS: do NOT force stereo. The OEM decoder can output up to 5.1.
+                    // Let the speaker config stay at whatever the user has set or what
+                    // the bitstream reported. Only default to 5.1 if currently above that
+                    // (AC-4 IMS does not support 7.1+).
+                    if (_speakerConfig.value !in listOf("Mono", "Stereo", "5.1")) {
+                        _speakerConfig.value = "5.1"
+                    }
                 }
             }
         }
@@ -526,12 +533,16 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                 }
                 
                 // Set default speaker layouts depending on channel configurations parsed
-                if (metadata.channelCount == 2) {
-                    _speakerConfig.value = "Stereo"
-                } else if (metadata.channelCount == 6) {
-                    _speakerConfig.value = "5.1"
-                } else if (metadata.channelCount >= 8) {
-                    _speakerConfig.value = if (formatKey == "truehd") "7.1" else "7.1.4"
+                val isAc4Format = metadata.mimeType.contains("ac4", ignoreCase = true)
+                when {
+                    isAc4Format -> {
+                        // AC-4 IMS: attempt up to 5.1 regardless of bitstream channel count,
+                        // since the OEM decoder can upmix the immersive objects to 5.1.
+                        _speakerConfig.value = "5.1"
+                    }
+                    metadata.channelCount == 2 -> _speakerConfig.value = "Stereo"
+                    metadata.channelCount == 6 -> _speakerConfig.value = "5.1"
+                    metadata.channelCount >= 8 -> _speakerConfig.value = if (formatKey == "truehd") "7.1" else "7.1.4"
                 }
 
                 // Generates Available Dolby presentations
