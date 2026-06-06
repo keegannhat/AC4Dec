@@ -724,6 +724,14 @@ object DolbyAc4Decoder {
                 codec = MediaCodec.createDecoderByType(mime) // Try standard type allocation
             }
 
+            if (mime.contains("ac4", ignoreCase = true)) {
+                // VERY IMPORTANT FIX FOR ANDROID BUG ON SAMSUNG HARDWARE:
+                // AC-4 L4 (Multichannel) decoders technically fail to configure if KEY_CHANNEL_COUNT is > 2, throwing exceptions.
+                // We MUST coerce the format's input channel count to 2 so MediaCodec configures successfully. 
+                // The bitstream contains the true layout and will use max-output-channel-count to unlock up to 7.1.4.
+                format.setInteger(MediaFormat.KEY_CHANNEL_COUNT, 2)
+            }
+
             // Force multichannel output if possible - limit maximum channel count to 16 based on codec capabilities
             val outCh = (targetChannelCount ?: 16).coerceAtMost(16)
             format.setInteger("max-output-channel-count", outCh)
