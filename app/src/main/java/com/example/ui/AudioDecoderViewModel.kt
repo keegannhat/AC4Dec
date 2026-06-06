@@ -96,7 +96,8 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
         .map { state ->
             when (state) {
                 is UIState.FileSelected ->
-                    state.metadata.mimeType.contains("ac4", ignoreCase = true)
+                    state.metadata.mimeType.contains("ac4", ignoreCase = true) &&
+                    state.metadata.profile.contains("IMS", ignoreCase = true)
                 else -> false
             }
         }
@@ -533,16 +534,17 @@ class AudioDecoderViewModel(application: Application) : AndroidViewModel(applica
                 }
                 
                 // Set default speaker layouts depending on channel configurations parsed
-                val isAc4Format = metadata.mimeType.contains("ac4", ignoreCase = true)
+                val isAc4ImsFormat = metadata.mimeType.contains("ac4", ignoreCase = true) && metadata.profile.contains("IMS", ignoreCase = true)
                 when {
-                    isAc4Format -> {
+                    isAc4ImsFormat -> {
                         // AC-4 IMS: attempt up to 5.1 regardless of bitstream channel count,
                         // since the OEM decoder can upmix the immersive objects to 5.1.
                         _speakerConfig.value = "5.1"
                     }
-                    metadata.channelCount == 2 -> _speakerConfig.value = "Stereo"
+                    metadata.channelCount <= 2 -> _speakerConfig.value = "Stereo"
                     metadata.channelCount == 6 -> _speakerConfig.value = "5.1"
-                    metadata.channelCount >= 8 -> _speakerConfig.value = if (formatKey == "truehd") "7.1" else "7.1.4"
+                    metadata.channelCount >= 8 -> _speakerConfig.value = if (formatKey == "truehd" || metadata.mimeType.contains("true-hd")) "7.1" else "7.1.4"
+                    else -> _speakerConfig.value = "Stereo"
                 }
 
                 // Generates Available Dolby presentations
